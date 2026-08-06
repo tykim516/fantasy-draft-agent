@@ -1,0 +1,21 @@
+# The warehouse and every cached response rebuild from `python scripts/ingest.py`.
+# Nothing under data/ is committed — nflverse redistribution carries CC-BY 4.0
+# attribution obligations, and a checked-in duckdb file is a merge conflict
+# waiting to happen.
+data/
+
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+
+# macOS
+.DS_Store

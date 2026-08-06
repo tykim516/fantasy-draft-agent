@@ -1,0 +1,77 @@
+name: main
+teams: 10
+format: redraft
+playoff_teams: 6
+playoff_start_week: 15
+trade_deadline_week: 12
+ir_slots: 2
+waivers: faab
+
+roster:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+  FLEX: 2         # W/R/T
+  SUPERFLEX: 0
+  K: 0            # no kicker slot in this league
+  DST: 1
+  BENCH: 5
+  # 9 starters, 14 roster spots, +2 IR (IR does not count against the 14)
+  # validate_league.py must FAIL on a null slot count rather than defaulting.
+
+scoring:
+  passing:
+    yards_per_point: 25        # +0.04/yd
+    td: 4
+    two_pt: 2
+    interception: -2           # non-standard, harsher than typical
+  rushing:
+    yards_per_point: 10        # +0.1/yd
+    td: 6
+    two_pt: 2
+  receiving:
+    reception: 1               # full PPR
+    yards_per_point: 10        # +0.1/yd
+    td: 6
+    two_pt: 2
+  misc:
+    fumble_lost: -2
+    fumble_recovery_td: 6
+  # No kicking block: this league has no K roster slot, so kicker scoring
+  # is inert. Kickers must be excluded from the player universe entirely —
+  # never rank, project, or tier them.
+  dst:
+    td: 6
+    sack: 1
+    interception: 2
+    fumble_recovery: 2
+    forced_fumble: 1
+    safety: 2
+    blocked_kick: 2
+    points_allowed:
+      "0": 5
+      "1-6": 4
+      "7-13": 3
+      "14-20": 1
+      "21-27": 0
+      "28-34": -1
+      "35+": -4
+    yards_allowed:             # non-standard: stacks with points_allowed
+      "0-99": 5
+      "100-199": 3
+      "200-299": 2
+      "300-349": 0
+      "350-399": -1
+      "400-449": -3
+      "450-499": -5
+      "500-549": -6
+      "550+": -7
+  special_teams:
+    td: 6
+    forced_fumble: 1
+    fumble_recovery: 1
+  special_teams_player:
+    td: 6
+    forced_fumble: 1
+    fumble_recovery: 1

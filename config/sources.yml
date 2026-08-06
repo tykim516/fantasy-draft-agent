@@ -1,0 +1,150 @@
+# Which sources ingest pulls, which seasons it pins, and how long cached
+# responses stay warm.
+#
+# Seasons are PINNED, not "the last four". A board built in August and the same
+# board rebuilt in November must draw on the same history, or week-over-week
+# diffs in data/exports/ measure the window sliding rather than the players
+# moving.
+
+version: 1
+
+warehouse:
+  path: data/ff.duckdb
+  # DuckDB is single-writer. A scheduled ingest writes here and swaps atomically
+  # over warehouse.path so an open interactive session never hits lock contention.
+  swap_path: data/ff.duckdb.incoming
+
+seasons:
+  # The season being drafted for.
+  draft_season: 2026
+  # Completed seasons used for stats, usage, and expected-points history.
+  # Newest last. Three years is enough to see a role change without letting a
+  # 2022 breakout carry a 2026 rank.
+  history: [2023, 2024, 2025]
+  # Tables that describe the upcoming season rather than a completed one. These
+  # load from draft_season and are expected to be thin or empty in early August;
+  # ingest logs a warning and continues rather than failing.
+  forward_looking: [rosters, depth_charts, schedules, injuries]
+
+cache:
+  dir: data/raw
+  # Hours before a cached response is refetched. Ingest honours these unless
+  # invoked with --force.
+  ttl_hours:
+    nflverse: 24
+    sleeper_players: 24
+    sleeper_trending: 6
+    sleeper_drafts: 12
+    fantasypros: 24
+
+sources:
+  nflverse:
+    enabled: true
+    required: true
+    package: nflreadpy        # nfl_data_py is deprecated; do not substitute it
+    license: "CC-BY 4.0 — credit nflverse"
+    tables:
+      # warehouse table -> nflreadpy loader, which season set it draws from, and
+      # any fixed kwargs. Spelled out rather than inferred so a loader signature
+      # change surfaces here instead of inside ingest.
+      player_stats:
+        loader: load_player_stats
+        seasons: history
+        args: {summary_level: week}
+      rosters:
+        loader: load_rosters
+        seasons: forward_looking
+      depth_charts:
+        loader: load_depth_charts
+        seasons: forward_looking
+      snap_counts:
+        loader: load_snap_counts
+        seasons: history
+      # History plus the draft season. In August the draft season's report does
+      # not exist yet upstream, so ingest keeps the completed seasons and says
+      # which ones it dropped — prior-season injury history still matters.
+      injuries:
+        loader: load_injuries
+        seasons: [history, forward_looking]
+      # Both season sets: completed seasons supply the final scores that become
+      # DST points allowed, the upcoming one supplies byes and opponents.
+      schedules:
+        loader: load_schedules
+        seasons: [history, forward_looking]
+      # Per team-week offensive and defensive totals. Feeds the derived
+      # dst_stats table; there is no other free source for team defense scoring.
+      team_stats:
+        loader: load_team_stats
+        seasons: history
+        args: {summary_level: week}
+      nextgen_stats_receiving:
+        loader: load_nextgen_stats
+        seasons: history
+        args: {stat_type: receiving}
+      nextgen_stats_rushing:
+        loader: load_nextgen_stats
+        seasons: history
+        args: {stat_type: rushing}
+      ff_playerids:
+        loader: load_ff_playerids     # the crosswalk; not season-scoped
+        seasons: static
+      # Expected fantasy points. Actual-minus-expected off this table is the
+      # cleanest free regression signal available.
+      ff_opportunity:
+        loader: load_ff_opportunity
+        seasons: history
+        args: {stat_type: weekly, model_version: latest}
+      # FantasyPros expert consensus rankings, redistributed by ffverse — the
+      # same consensus the keyed FantasyPros API serves, free and unauthenticated.
+      # This is ECR (a ranking), not ADP (a price); the board must not conflate them.
+      ff_rankings:
+        loader: load_ff_rankings
+        seasons: static
+        args: {type: draft}
+
+  sleeper:
+    enabled: true
+    required: false
+    base_url: https://api.sleeper.app/v1
+    endpoints:
+      players: /players/nfl        # ~5MB dump, once daily at most
+      trending_add: /players/nfl/trending/add
+      trending_drop: /players/nfl/trending/drop
+    # Public draft picks aggregate into a free ADP proxy — but Sleeper exposes
+    # no endpoint that *enumerates* public drafts, only ones that read a draft
+    # you already know the id of. So the proxy needs seed ids, listed here.
+    # Leave the list empty and ingest reports the proxy unavailable rather than
+    # publishing an ADP built on nothing.
+    adp_proxy:
+      enabled: true
+      draft_ids: []
+      min_drafts: 50             # below this the proxy is too noisy to publish
+
+  fantasypros:
+    enabled: true
+    required: false              # never blocks ingest
+    requires_env: FANTASYPROS_API_KEY
+    base_url: https://api.fantasypros.com/public/v2/json/nfl
+    note: >-
+      Free tier is prototype-only. When the key is unset the source is skipped
+      cleanly and adp.fallback_order drops through to the Sleeper proxy.
+
+market:
+  # First available source wins. Whichever is used gets named, with its as-of
+  # date, in the board's assumptions block.
+  #
+  # ADP is a *price* — where the market actually drafts a player. ECR is a
+  # *ranking* — where experts say he should go. They are not interchangeable and
+  # the board must label which one it used, because "beat ADP" and "beat ECR"
+  # are different claims.
+  adp_order: [fantasypros_adp, sleeper_proxy]
+  ecr_order: [fantasypros_ecr, ff_rankings]
+
+crosswalk:
+  # Join on gsis_id, falling back to the DynastyProcess ff_playerids table.
+  # Never join on player name: suffix and collision mismatches corrupt the
+  # board silently.
+  primary_key: gsis_id
+  table: ff_playerids
+  fallback_keys: [pfr_id, sleeper_id, espn_id]
+  forbid_name_joins: true

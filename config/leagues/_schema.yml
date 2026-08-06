@@ -1,0 +1,86 @@
+# Contract for every file in config/leagues/*.yml.
+#
+# This is data, not code: src/ffdraft/league.py and scripts/validate_league.py
+# read this file and enforce it. Adding a league setting means editing this
+# schema, not editing a validator, and every league file is checked the same way.
+#
+# The governing rule is that validation FAILS LOUDLY. There are no defaults
+# anywhere in this file. A missing key, a null value, or an unknown key is an
+# error — because a league setting that silently defaults produces a board that
+# is wrong in a way nobody notices.
+
+version: 1
+
+# Unknown top-level keys are an error, so a typo'd key never quietly does nothing.
+strict: true
+
+top_level:
+  name: {type: str, required: true}
+  teams: {type: int, required: true, min: 2, max: 32}
+  format: {type: str, required: true, enum: [redraft, keeper, dynasty]}
+  playoff_teams: {type: int, required: true, min: 2}
+  playoff_start_week: {type: int, required: true, min: 1, max: 22}
+  trade_deadline_week: {type: int, required: true, min: 1, max: 22}
+  ir_slots: {type: int, required: true, min: 0}
+  waivers: {type: str, required: true, enum: [faab, rolling, reverse_standings]}
+  roster: {type: map, required: true}
+  scoring: {type: map, required: true}
+
+cross_field:
+  - id: playoff_teams_fit
+    detail: playoff_teams must be <= teams
+  - id: deadline_before_playoffs
+    detail: trade_deadline_week must be < playoff_start_week
+
+roster:
+  # All of these must be present. `0` is the only way to say "this league does
+  # not use that slot" — omitting the key or leaving it null is a failure.
+  required_slots: [QB, RB, WR, TE, FLEX, SUPERFLEX, K, DST, BENCH]
+  slot_value: {type: int, min: 0, nullable: false}
+
+  # BENCH is capacity, not a lineup slot; it is excluded from starter counts.
+  starter_slots: [QB, RB, WR, TE, FLEX, SUPERFLEX, K, DST]
+
+  eligibility:
+    FLEX: [RB, WR, TE]
+    SUPERFLEX: [QB, RB, WR, TE]
+
+player_universe:
+  positions: [QB, RB, WR, TE, K, DST]
+  # Derived from roster counts, never hardcoded. A position with zero dedicated
+  # slots that is not eligible for any flex slot in this league is dropped from
+  # the player universe entirely — never ranked, projected, or tiered. Under
+  # main.yml that is exactly K.
+  exclude_zero_slot_positions: true
+
+scoring:
+  required_groups: [passing, rushing, receiving, misc, dst]
+  optional_groups: [kicking, special_teams, special_teams_player]
+
+  required_keys:
+    passing: [yards_per_point, td, two_pt, interception]
+    rushing: [yards_per_point, td, two_pt]
+    receiving: [reception, yards_per_point, td, two_pt]
+    misc: [fumble_lost]
+    dst: [td, sack, interception, fumble_recovery, safety, points_allowed]
+
+  # Divisors. A zero here is a ZeroDivisionError that would surface mid-board.
+  must_be_positive:
+    - passing.yards_per_point
+    - rushing.yards_per_point
+    - receiving.yards_per_point
+
+  # A scoring group is required only when the league actually starts that
+  # position. main.yml has K: 0, so the absent kicking block is correct, not
+  # an oversight — and if K were ever raised above 0, this check would demand it.
+  group_required_when:
+    kicking: "roster.K > 0"
+
+  banded:
+    fields: [dst.points_allowed, dst.yards_allowed]
+    # Band keys parse as "N", "N-M", or "N+". Bands must start at 0, be
+    # contiguous with no gaps or overlaps, and end open-topped, so every real
+    # game maps to exactly one band and no defense ever scores a null.
+    require_start_at_zero: true
+    require_contiguous: true
+    require_open_top: true
