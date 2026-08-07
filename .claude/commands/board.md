@@ -46,12 +46,14 @@ config. It is the only agent that assigns ranks.
 
 Require from it:
 
-- An assumptions block: scoring format, league size, roster slots, market source
-  and date, seasons covered
-- The board: `rank, player, pos, team, tier, proj_pts, vor, adp, adp_delta,
-  confidence, why`
+- An assumptions block: scoring format, league size, roster slots, seasons
+  covered, and **both** market sources with their own dates — the ECR scrape date
+  and the ADP file's `as_of`. Say if the ADP file is more than a week old.
+- The board: `rank, player, pos, team, tier, proj_pts, vor, ecr, adp,
+  ecr_vs_adp, confidence, why`
 - Columns marking contingent-role players and IR-eligible stashes
-- A "biggest divergences from market" section
+- A "biggest divergences from market" section, covering both your value vs the
+  market *and* where ECR and Sleeper ADP disagree with each other
 - A stated-gaps section for anything missing that lowered confidence
 
 ## 4. Export

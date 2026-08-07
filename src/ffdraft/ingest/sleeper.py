@@ -12,8 +12,11 @@ harder to diff.
 
 from __future__ import annotations
 
+import csv
 import json
+import re
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -160,8 +163,177 @@ def ingest_sleeper(
         count = replace_table(con, "sleeper_trending", combined, SOURCE)
         results.append(IngestResult("sleeper_trending", SOURCE, "loaded", rows=count))
 
-    results.append(_ingest_adp_proxy(con, sources, base, cache_cfg, ttls, force))
+    # The hand-maintained ADP file is preferred over the draft-scraping proxy:
+    # it is Sleeper's own published number rather than our resampling of it.
+    file_result = _ingest_adp_file(con, sources)
+    results.append(file_result)
+    if file_result.status == "loaded":
+        results.append(
+            IngestResult(
+                "sleeper_adp",
+                SOURCE,
+                "skipped",
+                detail="static ADP file loaded; draft proxy not needed",
+            )
+        )
+    else:
+        results.append(_ingest_adp_proxy(con, sources, base, cache_cfg, ttls, force))
     return results
+
+
+# Header spellings accepted from the ADP export, normalized to lowercase with
+# non-letters stripped. Spelled out so a changed export fails loudly on the
+# column it could not find rather than silently ranking on the wrong one.
+_ADP_COLUMNS = {
+    "player": ("name", "player", "playername", "fullname"),
+    "adp": ("adp", "avgpick", "averagedraftposition", "overall"),
+    "position": ("positionadp", "position", "pos"),
+    "team": ("team", "tm"),
+    "gsis_id": ("gsisid", "gsis"),
+    "sleeper_id": ("sleeperid", "playerid"),
+}
+
+
+def _header_map(fieldnames: list[str]) -> dict[str, str]:
+    """Map our canonical column names onto whatever the file actually used."""
+    seen = {re.sub(r"[^a-z0-9]", "", (f or "").lower()): f for f in fieldnames}
+    found = {}
+    for canonical, spellings in _ADP_COLUMNS.items():
+        for spelling in spellings:
+            if spelling in seen:
+                found[canonical] = seen[spelling]
+                break
+    return found
+
+
+def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestResult:
+    """Sleeper's published ADP, supplied as a file a human maintains.
+
+    Sleeper exposes no ADP endpoint — `/players/nfl/adp` and `/adp/nfl/{season}`
+    both 404, and nflreadpy has no ADP loader — so the number the other managers
+    in the league are looking at while they draft can only be copied in by hand.
+
+    ADP is a price, ECR is a value, and the board keeps both. This feeds
+    availability and slot-survival math; `ff_rankings` stays the pricing anchor.
+    """
+    from ..market.resolve import (
+        ResolverStats,
+        build_index,
+        load_aliases,
+        parse_position_adp,
+        resolve_row,
+        write_pending,
+    )
+    from ..warehouse import replace_table
+
+    cfg = sources["sources"].get("sleeper_adp_file", {})
+    table = "sleeper_adp"
+    if not cfg.get("enabled", False):
+        return IngestResult(table, SOURCE, "skipped", detail="sleeper_adp_file disabled")
+
+    path = resolve(cfg["path"])
+    if not path.is_file():
+        return IngestResult(
+            table, SOURCE, "skipped", detail=f"no ADP file at {cfg['path']} — see config/market/"
+        )
+
+    as_of = str(cfg.get("as_of") or "")
+    source_label = f"{SOURCE}_file (as of {as_of or 'unknown'})"
+
+    try:
+        with path.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            columns = _header_map(reader.fieldnames or [])
+            missing = [key for key in ("player", "adp") if key not in columns]
+            if missing:
+                return IngestResult(
+                    table,
+                    SOURCE,
+                    "failed",
+                    detail=(
+                        f"{path.name} is missing {missing}; found columns "
+                        f"{reader.fieldnames}"
+                    ),
+                )
+            raw_rows = list(reader)
+    except Exception as exc:  # noqa: BLE001
+        return IngestResult(table, SOURCE, "failed", detail=f"{type(exc).__name__}: {exc}")
+
+    index = build_index(con)
+    aliases = load_aliases(resolve(cfg.get("aliases", "config/market/adp_aliases.yml")))
+    stats = ResolverStats()
+
+    rows = []
+    for raw in raw_rows:
+        name = (raw.get(columns["player"]) or "").strip()
+        if not name:
+            continue
+        try:
+            adp = float(raw[columns["adp"]])
+        except (TypeError, ValueError):
+            continue
+
+        position, reported_rank = parse_position_adp(raw.get(columns.get("position", ""), ""))
+        resolution = resolve_row(
+            name,
+            position,
+            index,
+            aliases,
+            file_gsis_id=raw.get(columns.get("gsis_id", "")),
+            file_sleeper_id=raw.get(columns.get("sleeper_id", "")),
+        )
+        stats.record(resolution, name, position)
+
+        rows.append(
+            {
+                "gsis_id": resolution.gsis_id,
+                "team": resolution.team or (raw.get(columns.get("team", "")) or None),
+                "player": name,
+                "position": position or None,
+                "adp": adp,
+                "position_rank_reported": reported_rank,
+                "link_method": resolution.method,
+                "crosswalk_status": resolution.status,
+                "adp_source": "sleeper_file",
+                "adp_as_of": as_of or None,
+            }
+        )
+
+    if not rows:
+        return IngestResult(table, SOURCE, "failed", detail=f"{path.name} parsed to 0 usable rows")
+
+    write_pending(resolve(cfg.get("aliases", "config/market/adp_aliases.yml")), stats.pending)
+
+    df = pl.DataFrame(rows, infer_schema_length=None).sort("adp")
+    count = replace_table(con, table, df, source_label)
+
+    detail = stats.summary()
+    if stats.pending:
+        names = ", ".join(name for name, _, _ in stats.pending[:5])
+        detail += f" — needs review: {names}"
+        if len(stats.pending) > 5:
+            detail += f" (+{len(stats.pending) - 5} more)"
+    stale = _adp_staleness_warning(cfg)
+    if stale:
+        detail += f" — {stale}"
+    return IngestResult(table, SOURCE, "loaded", rows=count, detail=detail)
+
+
+def _adp_staleness_warning(cfg: dict) -> str:
+    """ADP moves fast in August; a silently ageing file is the main failure mode."""
+    as_of = cfg.get("as_of")
+    if not as_of:
+        return "no as_of set in sources.yml; board cannot report the ADP date"
+    if isinstance(as_of, str):
+        try:
+            as_of = date.fromisoformat(as_of)
+        except ValueError:
+            return f"as_of {as_of!r} is not an ISO date"
+    age = (date.today() - as_of).days
+    limit = cfg.get("max_age_days", 10)
+    if age > limit:
+        return f"STALE: ADP is {age} days old (limit {limit}); refresh config/market/"
+    return ""
 
 
 def _ingest_adp_proxy(

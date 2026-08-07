@@ -101,6 +101,12 @@ sources:
         loader: load_ff_rankings
         seasons: static
         args: {type: draft}
+      # Team names and abbreviations. Needed because the Sleeper ADP file lists
+      # team defenses by full name ("Cleveland Browns") while every keyed table
+      # here uses the abbreviation.
+      teams:
+        loader: load_teams
+        seasons: static
 
   sleeper:
     enabled: true
@@ -120,6 +126,32 @@ sources:
       draft_ids: []
       min_drafts: 50             # below this the proxy is too noisy to publish
 
+  # Sleeper's own published ADP, copied in by hand. Sleeper exposes no ADP
+  # endpoint (/players/nfl/adp and /adp/nfl/{season} both 404) and nflreadpy has
+  # no ADP loader, so this is the only way to get the number the other managers
+  # in the league are actually looking at while they draft.
+  #
+  # It is a *price* (where a player goes), not a *value* (where he should go).
+  # ECR from ff_rankings remains the pricing anchor; this drives availability
+  # and slot-survival math. See config/market/README.md.
+  sleeper_adp_file:
+    enabled: true
+    required: false              # never blocks ingest
+    path: config/market/sleeper_adp.csv
+    # The date the ADP was pulled. Set by hand on every refresh — a static file
+    # has no scrape date, and file mtime is wrong after any git clone. This is
+    # the date the board reports, so a stale value misleads silently.
+    as_of: 2026-08-06
+    # What population the ADP describes, surfaced as a board caveat. This league
+    # is 10-team full-PPR; ADP drawn from a different format is still useful as
+    # an ordering but should not be read as exact.
+    format_note: >-
+      Sleeper published ADP as shown in the app, format not separately
+      filterable. Treat as an ordering, not a pick coordinate.
+    # ADP moves fast in August. Ingest warns past this; it never fails.
+    max_age_days: 10
+    aliases: config/market/adp_aliases.yml
+
   fantasypros:
     enabled: true
     required: false              # never blocks ingest
@@ -127,7 +159,7 @@ sources:
     base_url: https://api.fantasypros.com/public/v2/json/nfl
     note: >-
       Free tier is prototype-only. When the key is unset the source is skipped
-      cleanly and adp.fallback_order drops through to the Sleeper proxy.
+      cleanly and market.adp_order drops through to the Sleeper sources.
 
 market:
   # First available source wins. Whichever is used gets named, with its as-of
@@ -137,7 +169,7 @@ market:
   # *ranking* — where experts say he should go. They are not interchangeable and
   # the board must label which one it used, because "beat ADP" and "beat ECR"
   # are different claims.
-  adp_order: [fantasypros_adp, sleeper_proxy]
+  adp_order: [sleeper_file, fantasypros_adp, sleeper_proxy]
   ecr_order: [fantasypros_ecr, ff_rankings]
 
 crosswalk:

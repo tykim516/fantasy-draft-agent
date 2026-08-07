@@ -161,6 +161,148 @@ def test_market_carries_its_source_and_date(market):
     ]
 
 
+# --- the ADP side of adp_deltas --------------------------------------------
+
+
+def test_adp_covers_the_top_of_the_board(market):
+    """Where the draft is actually decided, availability must be knowable."""
+    top = market.head(120)
+    assert top["adp"].null_count() <= 10
+
+
+def test_adp_is_absent_rather_than_invented_deep_on_the_board(market):
+    """The ADP file is ~300 players against ECR's ~478. Past its end there is no
+    ADP, and the board must carry a null instead of a substituted ECR value."""
+    assert market["adp"].null_count() > 0
+    assert market["adp"].null_count() < market.height
+
+
+def test_adp_rank_is_re_ranked_over_the_league_universe(market, warehouse, league):
+    """The failure this design is most exposed to: both series must be re-ranked
+    over the league's universe before differencing, or the kickers scattered
+    through each list introduce a drift that grows down the board.
+
+    The joined output is *not* contiguous — an ADP row whose player has no ECR
+    entry never appears — so the density check runs against the source, and the
+    output is only checked for the ordering it inherits.
+    """
+    universe = warehouse.execute(
+        "SELECT count(*) FROM sleeper_adp WHERE NOT list_contains(?, position)",
+        [list(league.excluded_positions)],
+    ).fetchone()[0]
+    ranked = market.drop_nulls("adp_rank_adj")
+    assert ranked["adp_rank_adj"].max() <= universe
+    assert ranked["adp_rank_adj"].n_unique() == ranked.height, "adjusted ranks are not unique"
+
+    # The re-ranking is what removes the kickers: the deepest surviving player
+    # must rank ahead of where he sat in the raw, kicker-contaminated file.
+    deepest = ranked.sort("adp_rank_adj").tail(1).to_dicts()[0]
+    assert deepest["adp_rank_adj"] <= deepest["adp"]
+
+
+def test_adp_rank_agrees_with_adp_ordering(market):
+    ranked = market.drop_nulls("adp").sort("adp")
+    assert ranked["adp_rank_adj"].to_list() == sorted(ranked["adp_rank_adj"].to_list())
+
+
+def test_ecr_rank_matches_market_rank(market):
+    """Same series under two names; if they ever diverge the deltas are lying."""
+    assert market["ecr_rank_adj"].to_list() == market["market_rank"].to_list()
+
+
+def test_divergence_is_null_exactly_where_adp_is(market):
+    """A missing ADP must never read as agreement."""
+    assert (market["adp"].is_null() == market["ecr_vs_adp"].is_null()).all()
+
+
+def test_divergence_is_the_difference_of_the_adjusted_ranks(market):
+    both = market.filter(pl.col("adp").is_not_null())
+    computed = both["adp_rank_adj"] - both["ecr_rank_adj"]
+    assert (computed - both["ecr_vs_adp"]).abs().max() == 0
+
+
+def test_no_excluded_position_reaches_either_series(market, league):
+    """Kickers are scattered through the raw ADP file; none may survive."""
+    positions = set(market["position"].unique().to_list())
+    for excluded in league.excluded_positions:
+        assert excluded not in positions
+
+
+def test_adp_round_uses_this_league_size(market, league):
+    ranked = market.drop_nulls("adp_rank_adj")
+    first = ranked.filter(pl.col("adp_rank_adj") <= league.teams)
+    assert set(first["adp_round"].to_list()) == {1}
+
+
+def test_adp_carries_its_own_source_and_date(market):
+    """ECR and ADP are different markets with different dates; both get labelled."""
+    present = market.drop_nulls("adp")
+    assert present["adp_source"].unique().to_list() == ["sleeper_file"]
+    assert present["adp_as_of"].null_count() == 0
+    assert present["adp_as_of"].unique().len() == 1
+
+
+def test_team_defenses_join_across_the_two_sources(market):
+    """DSTs have no gsis_id on either side and join on team abbreviation, which
+    assumes both sources spell teams the nflverse way. Assert it, don't assume."""
+    dst = market.filter(pl.col("position") == "DST")
+    assert dst.height >= 25
+    # Joining on the abbreviation instead of the team name silently dropped 8 of
+    # these, because ff_rankings spells New England NEP and nflverse spells it NE.
+    assert dst["adp"].null_count() <= 2
+
+
+def test_disagreement_reads_agree_only_inside_one_round(market, league):
+    agree = market.filter(pl.col("market_disagreement") == "agree (under a round)")
+    assert agree["ecr_vs_adp"].abs().max() < league.teams
+
+
+def test_disagreement_names_a_direction(market):
+    labels = set(market["market_disagreement"].unique().to_list())
+    assert any("experts higher" in label for label in labels)
+    assert any("the room higher" in label for label in labels)
+
+
+# --- the resolver, against the real ADP file -------------------------------
+
+
+def test_the_adp_file_links_essentially_completely(warehouse):
+    """Regression guard on market/resolve.py. At the time of writing all 300 rows
+    link; a drop means the crosswalk or the file's naming changed."""
+    total, linked = warehouse.execute(
+        "SELECT count(*), count(*) FILTER (WHERE crosswalk_status = 'linked') FROM sleeper_adp"
+    ).fetchone()
+    assert total > 250
+    assert linked / total > 0.97, f"only {linked}/{total} ADP rows linked"
+
+
+def test_no_adp_row_was_resolved_by_guessing(warehouse):
+    methods = {
+        row[0]
+        for row in warehouse.execute("SELECT DISTINCT link_method FROM sleeper_adp").fetchall()
+    }
+    assert methods <= {"alias", "direct", "auto", "activity", "dst", "unlinked"}
+
+
+def test_adp_is_a_dense_ranking(warehouse):
+    """The file's ADP column is an ordering, not an average pick number. Ties or
+    gaps would mean the export changed shape and the round math is now wrong."""
+    values = [
+        row[0] for row in warehouse.execute("SELECT adp FROM sleeper_adp ORDER BY adp").fetchall()
+    ]
+    assert values == sorted(set(values)), "ADP values are not unique — is this still a rank?"
+    assert values[0] == 1.0
+
+
+def test_every_adp_row_keeps_a_join_key(warehouse):
+    """A linked row must carry either a gsis_id or, for a defense, a team."""
+    orphans = warehouse.execute(
+        "SELECT count(*) FROM sleeper_adp "
+        "WHERE crosswalk_status = 'linked' AND gsis_id IS NULL AND team IS NULL"
+    ).fetchone()[0]
+    assert orphans == 0
+
+
 # --- roster_context --------------------------------------------------------
 
 

@@ -115,20 +115,31 @@ Overriding them makes the result non-reproducible and must be said out loud.
 
 ### Market data, stated honestly
 
-The free market anchor is `ff_rankings` — FantasyPros consensus redistributed by
-ffverse. That is **ECR** (where experts say a player should go), not **ADP**
-(where he actually goes). Label which one the board used. True ADP needs
-`FANTASYPROS_API_KEY`, or seeded Sleeper draft ids in `config/sources.yml` —
-Sleeper exposes no endpoint that enumerates public drafts, so the proxy cannot
-discover them on its own. When neither is available, say the board is priced
-against ECR.
+The board carries **two** market anchors and never averages them:
+
+- **ECR** — `ff_rankings`, FantasyPros consensus redistributed by ffverse. Where
+  experts say a player *should* go. This is what the board prices against.
+- **ADP** — `sleeper_adp`, Sleeper's published ADP, maintained by hand at
+  `config/market/sleeper_adp.csv`. Where he *actually* goes. This league drafts
+  on Sleeper and Sleeper's draft board sorts by this number, so it models what
+  the other nine managers will do. All slot-survival math runs on it.
+
+`ecr_vs_adp` in `adp_deltas` is the gap between them, and it is the most
+actionable column on the board: a player experts rank higher than the room does
+falls further than his ECR implies. Label both sources and both dates — the ADP
+file is refreshed manually and `adp_as_of` can go stale. Sleeper exposes no ADP
+endpoint (`/players/nfl/adp` 404s) and nflreadpy has no ADP loader, which is why
+the file is hand-maintained; see `config/market/README.md`.
+
+Where an ADP value is missing, say the player is priced on ECR alone. Never
+present ECR as ADP.
 
 ## Board output
 
 An assumptions block first: scoring format, league size, roster slots, market
 source and date, and which seasons the data covers. Then:
 
-| rank | player | pos | team | tier | proj_pts | vor | adp | adp_delta | confidence | why |
+| rank | player | pos | team | tier | proj_pts | vor | ecr | adp | ecr_vs_adp | confidence | why |
 
 Followed by a **"biggest divergences from market"** section and a stated-gaps
 section. Exports go to `data/exports/` with a timestamp so boards are diffable

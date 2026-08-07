@@ -58,14 +58,22 @@ its draft-day rank. Kickers are excluded from the universe entirely.
 
 ## Board output schema
 
-An assumptions block first — scoring format, league size, roster slots, market
-source and date, and the seasons the data covers. Then:
+An assumptions block first — scoring format, league size, roster slots, the
+seasons the data covers, and **both** market sources with their own dates (ECR's
+scrape date and the ADP file's `as_of`, flagging the latter if it is stale).
+Then:
 
-| rank | player | pos | team | tier | proj_pts | vor | adp | adp_delta | confidence | why |
+| rank | player | pos | team | tier | proj_pts | vor | ecr | adp | ecr_vs_adp | confidence | why |
 
-`confidence` is a required column, not a footnote. Then a **"biggest divergences
-from market"** section, and a stated-gaps section listing anything missing that
-lowered confidence.
+`confidence` is a required column, not a footnote. ECR and ADP are separate
+columns on purpose: ECR is where experts say a player should go, ADP is where the
+room actually takes him. Do not collapse them into one "market" number — the gap
+is the most useful thing on the row.
+
+Then a **"biggest divergences from market"** section and a stated-gaps section
+listing anything missing that lowered confidence. A player with no `adp` value
+belongs in stated gaps: he is priced on ECR alone and carries no availability
+estimate.
 
 ## Honesty rules
 

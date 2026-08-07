@@ -1,0 +1,28 @@
+# Reviewed name -> gsis_id decisions for the Sleeper ADP file.
+#
+# This project forbids joining on player name. This file is how a name-keyed
+# market file is admitted anyway: every entry here is a human decision, recorded
+# and diffable, rather than a fuzzy match made silently at runtime.
+#
+# `pending` is REGENERATED on every ingest — do not edit it. To resolve an entry,
+# move it into `confirmed` with the right gsis_id:
+#
+#   confirmed:
+#     nathaniel dell|WR:
+#       gsis_id: 00-0038996
+#       note: nflverse lists him as Tank Dell
+#
+# It then vanishes from `pending` on the next run. Players left pending are still
+# returned on the board, flagged `unlinked` — never dropped — but they carry no
+# usage or projection data, because nothing can be joined to them.
+confirmed:
+  cameron skattebo|RB:
+    gsis_id: 00-0040715
+    note: nflverse lists him as Cam Skattebo (NYG)
+  cameron ward|QB:
+    gsis_id: 00-0040676
+    note: nflverse lists him as Cam Ward (TEN)
+  nathaniel dell|WR:
+    gsis_id: 00-0038977
+    note: nflverse lists him as Tank Dell (HOU)
+pending: {}

@@ -17,8 +17,12 @@ uv sync                                          # Python 3.11+, deps from pypro
 uv run python scripts/validate_league.py --summary
 uv run python scripts/ingest.py                  # builds data/ff.duckdb (~30s, ~28 MB)
 uv run python scripts/ingest.py --freshness      # what loaded, how old
-uv run pytest                                    # 128 tests
+uv run pytest                                    # 176 tests
 ```
+
+To refresh Sleeper ADP: replace `config/market/sleeper_adp.csv`, update
+`sources.sleeper_adp_file.as_of` in `config/sources.yml`, and re-run
+`uv run python scripts/ingest.py --sources sleeper`. See `config/market/README.md`.
 
 No API key is required. FantasyPros is optional; everything else is free and
 unauthenticated.
@@ -57,7 +61,8 @@ CLAUDE.md            orchestrator — decomposes, dispatches, assembles. No anal
 .claude/agents/      five sub-agents
 .claude/commands/    /board, /refresh, /compare
 config/              league config + schema, pinned seasons and source settings
-src/ffdraft/         warehouse, league, scoring, ingest/, metrics/
+config/market/       the hand-maintained Sleeper ADP file and its alias map
+src/ffdraft/         warehouse, league, scoring, ingest/, metrics/, market/
 sql/                 named queries agents call by filename
 scripts/             ingest.py, validate_league.py, query.py
 data/                gitignored; rebuilds from ingest
@@ -91,8 +96,8 @@ change every agent's answer.
 - `/compare <player-a> <player-b>` — head-to-head on usage, market, and news
 
 Board output carries an assumptions block (scoring, league size, roster slots,
-market source and date), then
-`rank, player, pos, team, tier, proj_pts, vor, adp, adp_delta, confidence, why`,
+both market sources with their own dates), then
+`rank, player, pos, team, tier, proj_pts, vor, ecr, adp, ecr_vs_adp, confidence, why`,
 then a "biggest divergences from market" section. Confidence is a required
 column. Tiers lead, because presenting #14 as better than #16 when the gap is a
 third of a point is false precision.
@@ -114,7 +119,7 @@ uv run python scripts/query.py usage_profile --show      # print the SQL
 |---|---|
 | `usage_profile` | What is his role? Season rates, last-six window, and the trend between them |
 | `points_over_expected` | Did he earn it? Actual minus expected, with component splits |
-| `adp_deltas` | What does he cost? Market rank, round in *this* league size, consensus spread |
+| `adp_deltas` | What does he cost, and when does he leave the board? ECR and Sleeper ADP side by side, rounds at *this* league size, and where the two disagree |
 | `roster_context` | Is the role good, or is the player good? Team share, depth chart, IR eligibility |
 
 If agents compose SQL fresh each run, two invocations will compute target share
@@ -131,6 +136,18 @@ actual-minus-expected is the cleanest free regression signal available.
 **Sleeper** public API supplies the player master list with cross-platform ids
 and trending adds/drops. **FantasyPros** requires `FANTASYPROS_API_KEY` and skips
 cleanly when unset.
+
+**Sleeper ADP** arrives as a file a human maintains at
+`config/market/sleeper_adp.csv`, because Sleeper publishes no ADP endpoint. It is
+the only hand-edited input in the project; see `config/market/README.md`. It
+matters because the league drafts on Sleeper and Sleeper's draft board sorts by
+this number, so it models what the other nine managers will actually do.
+
+The board keeps ECR and ADP as separate columns and never averages them. ECR is a
+*value* anchor (where experts say a player should go) and prices the board; ADP
+is an *availability* anchor (where he actually goes) and drives slot-survival
+math. `ecr_vs_adp` is the gap, and it is the most actionable column on the board
+— a player experts rank higher than the room falls further than his ECR implies.
 
 Three derived tables are built during ingest because no free source provides
 them directly: `pbp_redzone` (red-zone and inside-10 touches, aggregated from
@@ -161,9 +178,9 @@ must halve the reception contribution. Matching another library's PPR number
 would not prove that — the two agree only by coincidence of settings.
 
 ```bash
-uv run pytest                     # 128 tests
-uv run pytest -m "not warehouse"  # 99 unit tests, no ingest required
-uv run pytest -m warehouse        # 29 integration tests against data/ff.duckdb
+uv run pytest                     # 176 tests
+uv run pytest -m "not warehouse"  # 130 unit tests, no ingest required
+uv run pytest -m warehouse        # 46 integration tests against data/ff.duckdb
 ```
 
 Integration tests skip cleanly when the warehouse is absent. They check the
@@ -196,17 +213,28 @@ averages drifting out of credible range.
 These are stated rather than papered over, because a hidden gap is worse than a
 declared one.
 
-- **The board is priced against ECR, not ADP, by default.** `ff_rankings` is
-  FantasyPros expert consensus — where experts say a player should go, not where
-  he actually goes. True ADP needs `FANTASYPROS_API_KEY`.
-- **The Sleeper ADP proxy needs seed draft ids.** Sleeper exposes endpoints to
-  read a draft by id but none that enumerate public drafts, so the proxy cannot
-  discover them. Add ids under `sources.sleeper.adp_proxy.draft_ids` to enable
-  it; until then it reports unavailable rather than publishing an ADP with
-  nothing behind it.
-- **ECR links to `gsis_id` for ~81% of the full list.** The top of the board
-  links near-perfectly; misses are mostly rookies the crosswalk has not picked up.
+- **ADP is a hand-maintained file and goes stale.** Sleeper publishes no ADP
+  endpoint (`/players/nfl/adp` and `/adp/nfl/{season}` both 404) and `nflreadpy`
+  has no ADP loader, so `config/market/sleeper_adp.csv` is copied in by a human
+  and dated by hand in `config/sources.yml`. Ingest warns past `max_age_days`,
+  but nothing can refresh it automatically. ADP moves fast in August.
+- **The ADP file's `Position ADP` column disagrees with its own overall
+  ordering** — Chase is ADP 3 / WR2 while Nacua is ADP 4 / WR1. The two columns
+  come from different computations upstream. Only the position label is used;
+  positional rank is re-derived. This is reported, not reconciled.
+- **ADP covers ~300 players against ECR's ~478.** Below roughly the 250th player
+  there is no ADP and the board is priced on ECR alone. Those rows carry a null
+  `adp`, never a substituted one.
+- **ECR links to `gsis_id` for ~81% of the full list**, via
+  `ff_playerids.fantasypros_id`. This is now the binding constraint on ADP
+  coverage at the top of the board: six of the top 120 ECR players have no ADP,
+  and five of them *are* in the ADP file — the miss is on the ECR side, because
+  `ff_playerids` has no `fantasypros_id` for them. They are 2026 rookies
+  (Jeremiyah Love, Carnell Tate, Jordyn Tyson, Makai Lemon, Jadarian Price).
   Unlinked players are returned flagged, never dropped.
+- **The Sleeper draft-scraping proxy is dormant.** It remains in the code and
+  needs seed ids under `sources.sleeper.adp_proxy.draft_ids`; Sleeper exposes no
+  endpoint that enumerates public drafts. The file supersedes it.
 - **Special-teams forced fumbles and fumble recoveries are not scored
   separately.** nflverse team stats do not split forced fumbles by phase. Both
   settings score zero and are listed in `scoring.KNOWN_GAPS`.

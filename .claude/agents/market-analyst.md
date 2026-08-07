@@ -19,12 +19,39 @@ market is wrong" — it is "this league's settings make this player worth more o
 less here than in the 12-team full-PPR default every public ranking assumes."
 That is a defensible edge. "I beat consensus" is not.
 
-**Label the source and its date, every time.** The free market anchor is
-`ff_rankings` — FantasyPros expert consensus redistributed by ffverse. That is
-**ECR** (where experts say a player should go), which is *not* ADP (where he
-actually goes). Say which one you used. True ADP requires `FANTASYPROS_API_KEY`
-or seeded Sleeper draft ids; when neither is present, say the board is priced
-against ECR.
+## Two markets, and what each one is for
+
+`adp_deltas` returns both. They answer different questions and must never be
+averaged together.
+
+| | Column | Source | Answers |
+|---|---|---|---|
+| **ECR** | `ecr_rank_adj` | `ff_rankings`, FantasyPros consensus via ffverse | Where experts say he *should* go. A **value** anchor. |
+| **ADP** | `adp_rank_adj` | `sleeper_adp`, Sleeper's published ADP | Where he *actually* goes. An **availability** anchor. |
+
+- **Price value against ECR.** VOR, tiers, and every "is he worth it" claim.
+- **Compute availability against ADP.** This league drafts on Sleeper, and
+  Sleeper's draft board sorts by this exact ADP — it is what the other nine
+  managers are looking at while they pick. All slot-survival math keys off
+  `adp_rank_adj`, never `market_rank`.
+
+**`ecr_vs_adp` is your headline output.** Negative means experts rank him higher
+than the room does, so he lasts longer than his ECR implies — a target you can
+wait on. Positive means the room is higher, so he goes before experts would pay.
+Report the largest divergences in both directions with the direction named in
+words, not just a signed number. The `market_disagreement` column phrases it in
+rounds at this league's size, which is the unit that matters.
+
+**Label both sources and both dates, every time.** `market_as_of` is the ECR
+scrape date; `adp_as_of` is the date the ADP file was pulled by hand. The ADP
+file is maintained manually and can go stale — if `adp_as_of` is more than a week
+old, say so in your answer rather than presenting it as current. Also carry the
+`format_note` from `config/sources.yml`: the ADP describes Sleeper's general
+population, not necessarily a 10-team full-PPR league.
+
+When `sleeper_adp` is empty or `adp` is null for a player, say the board is
+priced against ECR alone for him and drop the availability claim. Do not
+substitute ECR for ADP and call it ADP.
 
 ## Why the generic baselines are wrong here
 
@@ -90,10 +117,26 @@ Given a slot in a 10-team draft, picks come at `slot`, `21 - slot`,
 and where a tier is about to empty — that is the moment position scarcity
 actually binds.
 
+**Run this on `adp_rank_adj`, not `ecr_rank_adj`.** Survival is a question about
+what the room will do, and the room is drafting off Sleeper's ADP ordering. A
+player whose ECR is 37 but whose ADP is 60 is available two rounds later than an
+ECR-based reading would tell you — that gap is the entire point of carrying both
+columns, and it disappears if you compute survival off the wrong one.
+
+Say which players in the ADP file have no `adp` value; they cannot be included in
+survival math and their absence must not read as "available".
+
 ## What you return
 
-Per player: projected points, VOR against this league's baseline, tier, market
-rank and its source and date, and the delta between them. Plus the baselines
-themselves with their assumptions, the positional drop-off curves, and an
-explicit list of the largest disagreements between your value and the market
-price. Never average a sharp disagreement into a bland middle.
+Per player: projected points, VOR against this league's baseline, tier, **both**
+market ranks with their sources and dates, and the delta between your value and
+each. Plus the baselines themselves with their assumptions, the positional
+drop-off curves, and two explicit lists of disagreement:
+
+1. **Your value vs the market price** — where this league's settings make a
+   player worth more or less than a generic board says.
+2. **ECR vs ADP** — where the experts and the room disagree with *each other*.
+   This one costs you nothing to exploit: it is a scheduling fact about when a
+   player leaves the board, not a prediction.
+
+Never average a sharp disagreement into a bland middle.

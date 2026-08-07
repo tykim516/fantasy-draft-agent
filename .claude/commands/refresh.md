@@ -28,5 +28,14 @@ and one line on whether the warehouse is fit to build a board on.
 Expected skips, which are **not** failures:
 
 - `fantasypros_adp` when `FANTASYPROS_API_KEY` is unset
-- `sleeper_adp` when no `draft_ids` are seeded in `config/sources.yml`
+- the Sleeper draft proxy, which is skipped whenever the hand-maintained ADP file
+  loaded — the file is preferred, so this skip means things are working
+
+`sleeper_adp` **loading** is the normal case. Two things in its detail line need
+reporting rather than passing over:
+
+- `unlinked N` with named players — they need an entry in
+  `config/market/adp_aliases.yml` before they carry ADP on the board
+- a `STALE:` warning — the ADP file is maintained by hand and has aged past
+  `max_age_days`. Say so plainly; ADP moves fast in August.
 - Draft-season injuries, snap counts, and stats before the season starts

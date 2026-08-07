@@ -47,9 +47,21 @@ pass `--seasons` unless explicitly asked; if you do, say loudly that the result
 is not reproducible.
 
 **Optional sources are allowed to be absent.** FantasyPros needs
-`FANTASYPROS_API_KEY` and the Sleeper ADP proxy needs seeded `draft_ids`. Both
+`FANTASYPROS_API_KEY` and the Sleeper draft proxy needs seeded `draft_ids`. Both
 skip cleanly by design. Report them as skipped with the reason. Never treat a
 skipped optional source as a failure, and never invent a substitute for it.
+
+**`sleeper_adp` comes from a file a human maintains** at
+`config/market/sleeper_adp.csv` — Sleeper publishes no ADP endpoint, so there is
+nothing to fetch. You do not refresh it; you report on it. Two things in its
+result line must be surfaced, not passed over:
+
+- `unlinked N` and the named players — they need a reviewed entry in
+  `config/market/adp_aliases.yml`. Look the gsis_id up in `ff_playerids` by
+  position and team, and propose it; do not write the file yourself unless asked.
+- a `STALE:` warning — the file has aged past `max_age_days`. Say so plainly.
+
+Never edit `sleeper_adp.csv` to make ingest look cleaner. It is an input.
 
 ## Known preseason behaviour
 
