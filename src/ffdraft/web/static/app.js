@@ -263,27 +263,47 @@ async function startRun(command, args) {
   const out = $("#console-out");
   try {
     const job = await post("/api/run", { command, args });
-    currentJob = { id: job.id, offset: 0 };
-    out.textContent = "";
-    $("#cancel").hidden = false;
-    appendLines(job.lines);
-    poll();
+    attach(job);
+    if (job.attached) {
+      setStatus(`already running — attached, ${job.elapsed_seconds}s elapsed`, "running");
+    }
   } catch (err) {
     out.textContent = "error: " + err.message;
+    setStatus("failed", "failed");
   }
+}
+
+function attach(job) {
+  currentJob = { id: job.id, offset: 0, command: job.command };
+  $("#console-out").textContent = "";
+  $("#cancel").hidden = false;
+  appendLines(job.lines);
+  currentJob.offset = job.next_offset;
+  clearTimeout(pollTimer);
+  poll();
 }
 
 async function poll() {
   if (!currentJob) return;
-  const view = await api(`/api/run/${currentJob.id}?since=${currentJob.offset}`);
+  let view;
+  try {
+    view = await api(`/api/run/${currentJob.id}?since=${currentJob.offset}`);
+  } catch (err) {
+    // A dropped poll must not silently orphan a run that is still going.
+    setStatus("lost contact with the job: " + err.message, "failed");
+    return;
+  }
   currentJob.offset = view.next_offset;
   appendLines(view.lines);
 
   if (view.status === "running") {
+    // An agent run can sit silent for a minute between tool calls, so the timer
+    // is what tells you it is alive rather than hung.
+    setStatus(`running · ${fmtElapsed(view.elapsed_seconds)}`, "running");
     pollTimer = setTimeout(poll, 1000);
   } else {
     $("#cancel").hidden = true;
-    appendLines([`[${view.status}]`]);
+    setStatus(`${view.status} · ${fmtElapsed(view.elapsed_seconds)}`, view.status);
     // A finished refresh changed the warehouse; the board must not keep showing
     // pre-ingest numbers.
     if (view.command === "refresh" && view.status === "done") {
@@ -292,6 +312,35 @@ async function poll() {
     }
     currentJob = null;
   }
+}
+
+function fmtElapsed(seconds) {
+  if (seconds === null || seconds === undefined) return "";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+}
+
+function setStatus(text, kind) {
+  const el = $("#run-status");
+  el.textContent = text;
+  el.className = "pill status-" + (kind || "");
+}
+
+// On load, re-attach to anything already running. Without this a page reload
+// orphans a live agent run and the only sign of it is a confusing 409.
+async function reattach() {
+  for (const command of ["board", "compare", "refresh"]) {
+    try {
+      const job = await api(`/api/run?command=${command}`);
+      attach(job);
+      setStatus(`/${command} already running · ${fmtElapsed(job.elapsed_seconds)}`, "running");
+      return true;
+    } catch {
+      /* nothing running for this command */
+    }
+  }
+  return false;
 }
 
 function appendLines(lines) {
@@ -347,4 +396,8 @@ $("#reset").onclick = async () => {
   }
   if (draft.slot) slotSel.value = String(draft.slot);
   await loadBoard();
+
+  if (await reattach()) {
+    document.querySelector('.tab[data-tab="console"]').click();
+  }
 })();

@@ -213,6 +213,109 @@ def test_only_the_three_commands_are_allowed(runner):
             runner.build(bad)
 
 
+def test_agent_runs_stream_their_progress(runner):
+    """Plain `claude -p` writes nothing until the run ends, which makes a healthy
+    five-minute /board indistinguishable from a crash. The stream flags are what
+    make progress visible, so they are asserted rather than assumed."""
+    argv = runner.build("board", "--slot 5")
+    assert "--output-format" in argv
+    assert "stream-json" in argv
+    assert "--verbose" in argv
+
+
+def test_refresh_does_not_ask_for_json(runner):
+    """ingest.py prints human-readable lines; parsing them as JSON would drop
+    every one of them."""
+    assert "--output-format" not in runner.build("refresh")
+
+
+# --- stream formatting -----------------------------------------------------
+
+
+def test_dispatch_of_a_subagent_is_visible():
+    """Watching the three analysts fan out is the clearest sign a board run is
+    healthy, so a Task call names the agent."""
+    from ffdraft.web.runner import format_event
+
+    lines = format_event(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Task",
+                        "input": {
+                            "subagent_type": "market-analyst",
+                            "description": "price the board",
+                        },
+                    }
+                ]
+            },
+        }
+    )
+    assert lines == ["→ dispatch market-analyst: price the board"]
+
+
+def test_subagent_output_is_indented():
+    from ffdraft.web.runner import format_event
+
+    lines = format_event(
+        {
+            "type": "assistant",
+            "parent_tool_use_id": "toolu_1",
+            "message": {"content": [{"type": "text", "text": "checking usage"}]},
+        }
+    )
+    assert lines == ["   ↳ checking usage"]
+
+
+def test_tool_results_are_summarised_not_dumped():
+    """A single query result can be tens of thousands of characters; printing it
+    buries the progress you opened the console to see."""
+    from ffdraft.web.runner import format_event
+
+    lines = format_event(
+        {
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "content": "x" * 5000}]},
+        }
+    )
+    assert lines == ["   ← 5,000 chars"]
+    assert "xxxx" not in "".join(lines)
+
+
+def test_the_final_result_carries_cost_and_duration():
+    from ffdraft.web.runner import format_event
+
+    lines = format_event(
+        {
+            "type": "result",
+            "subtype": "success",
+            "result": "the board",
+            "duration_ms": 184000,
+            "total_cost_usd": 1.234,
+        }
+    )
+    joined = "\n".join(lines)
+    assert "the board" in joined
+    assert "184s" in joined
+    assert "$1.23" in joined
+
+
+def test_an_errored_result_says_so():
+    from ffdraft.web.runner import format_event
+
+    lines = format_event({"type": "result", "is_error": True, "result": "boom", "duration_ms": 10})
+    assert "ERROR" in "\n".join(lines)
+
+
+def test_unknown_event_types_are_dropped_quietly():
+    from ffdraft.web.runner import format_event
+
+    assert format_event({"type": "rate_limit_event", "rate_limit_info": {}}) == []
+
+
 def test_arguments_are_not_shell_interpreted(runner):
     """argv is passed as a list and never through a shell, so metacharacters are
     inert rather than injectable."""

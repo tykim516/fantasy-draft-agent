@@ -212,12 +212,32 @@ class RunBody(BaseModel):
 
 @app.post("/api/run")
 def run(body: RunBody) -> dict[str, Any]:
+    """Start a command, or hand back the one already running.
+
+    Re-attaching rather than 409-ing is the point: a long agent run that produces
+    no visible output looks broken, so the natural move is to press the button
+    again. That must show you the run in progress, not an error.
+    """
     try:
         job = runner.start(body.command, body.args)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
+    except RuntimeError:
+        existing = runner.running(body.command.strip().lstrip("/"))
+        if existing is None:
+            raise
+        view = existing.view()
+        view["attached"] = True
+        return view
+    return job.view()
+
+
+@app.get("/api/run")
+def current(command: str) -> dict[str, Any]:
+    """The live job for a command, so a reloaded page can re-attach to it."""
+    job = runner.running(command.strip().lstrip("/"))
+    if job is None:
+        raise HTTPException(404, f"no running /{command}")
     return job.view()
 
 
