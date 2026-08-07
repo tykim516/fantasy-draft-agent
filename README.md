@@ -17,7 +17,8 @@ uv sync                                          # Python 3.11+, deps from pypro
 uv run python scripts/validate_league.py --summary
 uv run python scripts/ingest.py                  # builds data/ff.duckdb (~30s, ~28 MB)
 uv run python scripts/ingest.py --freshness      # what loaded, how old
-uv run pytest                                    # 176 tests
+uv run pytest                                    # 219 tests
+uv run python scripts/serve.py                   # local draft UI on :8000
 ```
 
 To refresh Sleeper ADP: replace `config/market/sleeper_adp.csv`, update
@@ -63,8 +64,9 @@ CLAUDE.md            orchestrator — decomposes, dispatches, assembles. No anal
 config/              league config + schema, pinned seasons and source settings
 config/market/       the hand-maintained Sleeper ADP file and its alias map
 src/ffdraft/         warehouse, league, scoring, ingest/, metrics/, market/
+src/ffdraft/web/     local draft UI (FastAPI + a static page, no build step)
 sql/                 named queries agents call by filename
-scripts/             ingest.py, validate_league.py, query.py
+scripts/             ingest.py, validate_league.py, query.py, serve.py
 data/                gitignored; rebuilds from ingest
 ```
 
@@ -87,6 +89,42 @@ The orchestrator dispatches `usage-analyst`, `market-analyst`, and `news-scout`
 `ranking-synthesizer`. Only the synthesizer waits. Every dispatch carries the
 full league config, not just that agent's slice — scoring format and roster slots
 change every agent's answer.
+
+## The draft UI
+
+```bash
+uv run python scripts/serve.py        # http://127.0.0.1:8000
+```
+
+A local web board for running a live draft. Click a player to mark him taken,
+shift-click to mark him yours; state persists to `data/draft_state.json` and
+survives a restart, because a draft is one shot.
+
+It runs at two speeds, kept deliberately separate:
+
+| | What it does | How long |
+|---|---|---|
+| **Board / Compare tabs** | Read the warehouse directly — ECR, ADP, tiers, usage, survival-to-your-next-pick | instant |
+| **Commands tab** | Shells out to `claude -p "/board …"`, fans out to sub-agents | minutes, costs tokens |
+
+Use the native board while the clock is running and the agent runs the night
+before. `/refresh` is the exception: it is `data-ingest` and nothing else, so the
+UI calls `scripts/ingest.py` directly rather than burning an agent turn to shell
+out to a script.
+
+**The native board is market-ordered, not projection-ordered, and says so.** It
+ranks by ECR with ADP, tiers and usage beside it. It shows no `proj_pts` and no
+VOR, because this project produces neither outside an agent run — inventing them
+in the UI would mean inventing numbers.
+
+Set your draft slot and every row gets a `next pick` read (`likely` / `toss-up` /
+`gone`) computed from ADP against your actual snake picks — from slot 5 in a
+10-team league those are 5, 16, 25, 36. The read is coarse on purpose: ADP is a
+central tendency with real variance, and a precise probability would be false
+confidence.
+
+The server binds to `127.0.0.1` and refuses any other host. It has no auth and
+can start subprocesses, so it must not be exposed on a network interface.
 
 ## Commands
 
@@ -178,9 +216,9 @@ must halve the reception contribution. Matching another library's PPR number
 would not prove that — the two agree only by coincidence of settings.
 
 ```bash
-uv run pytest                     # 176 tests
-uv run pytest -m "not warehouse"  # 130 unit tests, no ingest required
-uv run pytest -m warehouse        # 46 integration tests against data/ff.duckdb
+uv run pytest                     # 219 tests
+uv run pytest -m "not warehouse"  # 163 unit tests, no ingest required
+uv run pytest -m warehouse        # 56 integration tests against data/ff.duckdb
 ```
 
 Integration tests skip cleanly when the warehouse is absent. They check the

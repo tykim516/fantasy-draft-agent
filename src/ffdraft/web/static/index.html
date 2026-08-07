@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draft board</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Draft board</h1>
+  <div class="assumptions" id="assumptions">loading…</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="board">Board</button>
+  <button class="tab" data-tab="myteam">My team <span class="badge" id="my-count">0</span></button>
+  <button class="tab" data-tab="compare">Compare</button>
+  <button class="tab" data-tab="console">Commands</button>
+</nav>
+
+<!-- ---------------- board ---------------- -->
+<section class="panel active" id="panel-board">
+  <div class="controls">
+    <label>Slot
+      <select id="slot"><option value="">—</option></select>
+    </label>
+    <label>Position
+      <select id="position">
+        <option value="ALL">All</option>
+        <option value="QB">QB</option><option value="RB">RB</option>
+        <option value="WR">WR</option><option value="TE">TE</option>
+        <option value="DST">DST</option>
+        <option value="RB,WR,TE">Flex-eligible</option>
+      </select>
+    </label>
+    <label>Search <input id="search" type="search" placeholder="name…" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" id="hide-taken" checked> Hide taken</label>
+    <span class="spacer"></span>
+    <span class="pill" id="draft-status">—</span>
+    <button id="undo" class="ghost">Undo</button>
+    <button id="reset" class="ghost danger">Reset</button>
+  </div>
+
+  <p class="hint">
+    Click a row to mark a player <strong>taken</strong>. Shift-click to mark him
+    <strong>yours</strong>. Click a taken player again to put him back.
+  </p>
+
+  <div class="scarcity" id="scarcity"></div>
+
+  <div class="table-wrap">
+    <table id="board">
+      <thead>
+        <tr>
+          <th>#</th><th>Player</th><th>Pos</th><th>Tm</th><th>Bye</th>
+          <th>Tier</th><th title="Expert consensus rank">ECR</th>
+          <th title="Sleeper ADP">ADP</th>
+          <th title="Positive = falls past ECR, a target. Negative = the room reaches.">Δ</th>
+          <th title="Will he last to your next pick?">Next pick</th>
+          <th title="Share of team targets last season">Tgt%</th>
+          <th title="Points over expected per game">POE</th>
+          <th>Role</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ---------------- my team ---------------- -->
+<section class="panel" id="panel-myteam">
+  <div id="roster-summary" class="roster-summary"></div>
+  <table id="my-picks">
+    <thead><tr><th>Rd</th><th>Overall</th><th>Player</th><th>Pos</th><th>Tm</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <h3>All picks</h3>
+  <table id="all-picks">
+    <thead><tr><th>Overall</th><th>Rd</th><th>Player</th><th>Pos</th><th>Mine</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- ---------------- compare ---------------- -->
+<section class="panel" id="panel-compare">
+  <div class="controls">
+    <input id="cmp-a" placeholder="player A" autocomplete="off">
+    <input id="cmp-b" placeholder="player B" autocomplete="off">
+    <button id="cmp-go">Compare</button>
+    <button id="cmp-agent" class="ghost">Run agent /compare</button>
+  </div>
+  <div id="cmp-out"></div>
+</section>
+
+<!-- ---------------- console ---------------- -->
+<section class="panel" id="panel-console">
+  <div class="controls">
+    <button data-run="refresh" class="run">/refresh</button>
+    <button data-run="board" class="run">/board</button>
+    <label>args <input id="run-args" placeholder="--slot 5 --top 100" autocomplete="off"></label>
+    <span class="spacer"></span>
+    <button id="cancel" class="ghost danger" hidden>Cancel</button>
+  </div>
+  <p class="hint">
+    <code>/refresh</code> runs <code>scripts/ingest.py --staged</code> directly — fast, free, no agent.
+    <code>/board</code> and <code>/compare</code> shell out to Claude Code, fan out to sub-agents,
+    and take <strong>minutes</strong>. Use the Board tab during the draft.
+  </p>
+  <pre id="console-out"></pre>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

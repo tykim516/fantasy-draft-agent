@@ -95,7 +95,14 @@ uv run python scripts/ingest.py --freshness               # meta_ingest
 uv run python scripts/ingest.py --staged                  # refresh, atomic swap
 uv run python scripts/query.py --list                     # named queries
 uv run python scripts/query.py usage_profile --season 2025 --limit 40
+uv run python scripts/serve.py                            # local draft UI
 ```
+
+**There is a local web UI** at `scripts/serve.py` for running a live draft. It
+reads the warehouse read-only and renders instantly; its Commands tab shells out
+to `claude -p` for real agent runs. If asked about draft tracking or a UI, point
+at it rather than building something new. It reads the same named queries you do,
+so a metric changed in `sql/` changes there too.
 
 Named queries live in `sql/` and are called by filename:
 `usage_profile`, `points_over_expected`, `adp_deltas`, `roster_context`.
