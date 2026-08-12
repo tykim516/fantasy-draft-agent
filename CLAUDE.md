@@ -126,17 +126,25 @@ The board carries **two** market anchors and never averages them:
 
 - **ECR** — `ff_rankings`, FantasyPros consensus redistributed by ffverse. Where
   experts say a player *should* go. This is what the board prices against.
-- **ADP** — `sleeper_adp`, Sleeper's published ADP, maintained by hand at
-  `config/market/sleeper_adp.csv`. Where he *actually* goes. This league drafts
-  on Sleeper and Sleeper's draft board sorts by this number, so it models what
-  the other nine managers will do. All slot-survival math runs on it.
+- **ADP** — `market_adp`, a published ADP export maintained by hand at
+  `config/market/adp.csv`. Where he *actually* goes. All slot-survival math runs
+  on it.
+
+**How much the ADP is worth depends on who published it.** Every row carries
+`adp_source` and `adp_format_note`, and both must be reported. ADP from the
+platform this league drafts on models what the other nine managers see on their
+screen. ADP from anywhere else describes a different crowd at a possibly
+different league size — still a real price, but not evidence about your
+opponents. **The current export is CBS Sports and this league drafts on Sleeper**,
+so availability claims must be hedged: "the market takes him around here", never
+"he will be there at your pick".
 
 `ecr_vs_adp` in `adp_deltas` is the gap between them, and it is the most
-actionable column on the board: a player experts rank higher than the room does
+actionable column on the board: a player experts rank higher than the market does
 falls further than his ECR implies. Label both sources and both dates — the ADP
-file is refreshed manually and `adp_as_of` can go stale. Sleeper exposes no ADP
-endpoint (`/players/nfl/adp` 404s) and nflreadpy has no ADP loader, which is why
-the file is hand-maintained; see `config/market/README.md`.
+file is refreshed manually and `adp_as_of` can go stale. No free API publishes
+ADP (Sleeper's `/players/nfl/adp` 404s, nflreadpy has no ADP loader), which is
+why the file is hand-maintained; see `config/market/README.md`.
 
 Where an ADP value is missing, say the player is priced on ECR alone. Never
 present ECR as ADP.

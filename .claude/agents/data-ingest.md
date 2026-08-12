@@ -1,6 +1,6 @@
 ---
 name: data-ingest
-description: Refreshes the DuckDB warehouse from nflverse, Sleeper, and FantasyPros, and reports table freshness. Use when data is stale, a source failed, or before building a board on old data.
+description: Refreshes the DuckDB warehouse from nflverse, Sleeper, the ADP file, and FantasyPros, and reports table freshness. Use when data is stale, a source failed, or before building a board on old data.
 tools: Bash, Read, Write, Edit, Glob, Grep
 model: sonnet
 ---
@@ -51,8 +51,8 @@ is not reproducible.
 skip cleanly by design. Report them as skipped with the reason. Never treat a
 skipped optional source as a failure, and never invent a substitute for it.
 
-**`sleeper_adp` comes from a file a human maintains** at
-`config/market/sleeper_adp.csv` — Sleeper publishes no ADP endpoint, so there is
+**`market_adp` comes from a file a human maintains** at
+`config/market/adp.csv` — no free API publishes ADP, so there is
 nothing to fetch. You do not refresh it; you report on it. Two things in its
 result line must be surfaced, not passed over:
 
@@ -61,7 +61,7 @@ result line must be surfaced, not passed over:
   position and team, and propose it; do not write the file yourself unless asked.
 - a `STALE:` warning — the file has aged past `max_age_days`. Say so plainly.
 
-Never edit `sleeper_adp.csv` to make ingest look cleaner. It is an input.
+Never edit `adp.csv` to make ingest look cleaner. It is an input.
 
 ## Known preseason behaviour
 

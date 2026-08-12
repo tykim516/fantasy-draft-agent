@@ -53,7 +53,7 @@ Require from it:
   ecr_vs_adp, confidence, why`
 - Columns marking contingent-role players and IR-eligible stashes
 - A "biggest divergences from market" section, covering both your value vs the
-  market *and* where ECR and Sleeper ADP disagree with each other
+  market *and* where ECR and ADP disagree with each other
 - A stated-gaps section for anything missing that lowered confidence
 
 ## 4. Export

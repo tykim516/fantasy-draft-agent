@@ -27,13 +27,29 @@ averaged together.
 | | Column | Source | Answers |
 |---|---|---|---|
 | **ECR** | `ecr_rank_adj` | `ff_rankings`, FantasyPros consensus via ffverse | Where experts say he *should* go. A **value** anchor. |
-| **ADP** | `adp_rank_adj` | `sleeper_adp`, Sleeper's published ADP | Where he *actually* goes. An **availability** anchor. |
+| **ADP** | `adp_rank_adj` | `market_adp`, a published ADP export | Where he *actually* goes. An **availability** anchor. |
 
 - **Price value against ECR.** VOR, tiers, and every "is he worth it" claim.
-- **Compute availability against ADP.** This league drafts on Sleeper, and
-  Sleeper's draft board sorts by this exact ADP — it is what the other nine
-  managers are looking at while they pick. All slot-survival math keys off
-  `adp_rank_adj`, never `market_rank`.
+- **Compute availability against ADP.** All slot-survival math keys off
+  `adp_rank_adj` and the observed `adp_earliest` / `adp_latest` range, never
+  `market_rank`.
+
+**How far to trust the ADP depends on who published it.** Every row carries
+`adp_source` and `adp_format_note`; read them before making an availability
+claim, and repeat them in your answer.
+
+- ADP from **the platform this league drafts on** is close to a model of what the
+  other nine managers see on their screen when they pick. Availability claims are
+  strong.
+- ADP from **anywhere else** describes how a different crowd, possibly at a
+  different league size and scoring format, behaves. It is still a real price and
+  the ECR-vs-ADP gap is still informative — but it is *not* evidence about what
+  your specific opponents will do. Say "the wider market takes him around here",
+  never "he will be there at your pick".
+
+The current export is **CBS Sports**, and the league drafts on Sleeper — so the
+second case applies. Its league size is not stated in the export; treat pick
+numbers as approximate and lean on the ordering rather than the exact value.
 
 **`ecr_vs_adp` is your headline output.** Negative means experts rank him higher
 than the room does, so he lasts longer than his ECR implies — a target you can
@@ -45,11 +61,11 @@ rounds at this league's size, which is the unit that matters.
 **Label both sources and both dates, every time.** `market_as_of` is the ECR
 scrape date; `adp_as_of` is the date the ADP file was pulled by hand. The ADP
 file is maintained manually and can go stale — if `adp_as_of` is more than a week
-old, say so in your answer rather than presenting it as current. Also carry the
-`format_note` from `config/sources.yml`: the ADP describes Sleeper's general
-population, not necessarily a 10-team full-PPR league.
+old, say so in your answer rather than presenting it as current. Also carry
+`adp_format_note`, which travels on every row: it says which population the ADP
+describes, and it is currently NOT this league's format.
 
-When `sleeper_adp` is empty or `adp` is null for a player, say the board is
+When `market_adp` is empty or `adp` is null for a player, say the board is
 priced against ECR alone for him and drop the availability claim. Do not
 substitute ECR for ADP and call it ADP.
 
@@ -118,10 +134,19 @@ and where a tier is about to empty — that is the moment position scarcity
 actually binds.
 
 **Run this on `adp_rank_adj`, not `ecr_rank_adj`.** Survival is a question about
-what the room will do, and the room is drafting off Sleeper's ADP ordering. A
-player whose ECR is 37 but whose ADP is 60 is available two rounds later than an
-ECR-based reading would tell you — that gap is the entire point of carrying both
-columns, and it disappears if you compute survival off the wrong one.
+where players actually come off the board, and ECR is not that. A player whose
+ECR is 37 but whose ADP is 60 goes about two rounds later than an ECR-based
+reading would tell you — that gap is the entire point of carrying both columns,
+and it disappears if you compute survival off the wrong one.
+
+Prefer `adp_earliest` / `adp_latest` over the average where they are present.
+The observed range is the real spread; a player averaging 35 who has never gone
+before 40 is genuinely safe at 30, and the average alone hides that.
+
+**Hedge the claim to match the source.** The current ADP is CBS, not the platform
+this league drafts on, so it describes the wider market rather than your nine
+opponents. Say "the market takes him around here", not "he will last to your
+pick".
 
 Say which players in the ADP file have no `adp` value; they cannot be included in
 survival math and their absence must not read as "available".

@@ -1,7 +1,9 @@
-# Sleeper ADP — a hand-maintained input
+# ADP — a hand-maintained input
 
-`sleeper_adp.csv` is the only file in this project a human is expected to edit by
-hand. Everything else rebuilds from ingest.
+`adp.csv` is the only file in this project a human is expected to edit by hand.
+Everything else rebuilds from ingest.
+
+**Current file: CBS Sports, pulled 2026-08-12. League size unknown.**
 
 ## Why it is here and not in `data/`
 
@@ -11,30 +13,48 @@ silently reverts the board to ECR-only pricing and nothing says so.
 
 ## Why it exists at all
 
-Sleeper's draft board sorts by Sleeper's own ADP, so that number is what the
-other managers in the league are actually looking at while they pick. It is the
-best available model of who will be gone by a given pick.
-
-Sleeper publishes no ADP endpoint — `/players/nfl/adp` and `/adp/nfl/{season}`
-both 404, `nflreadpy` has no ADP loader, and `ff_rankings` carries only ECR. So
-the number is copied in by hand.
+No free API publishes ADP. Sleeper has no ADP endpoint — `/players/nfl/adp` and
+`/adp/nfl/{season}` both 404 — `nflreadpy` has no ADP loader, and `ff_rankings`
+carries only ECR. So the number is copied in by hand.
 
 ADP and ECR are not interchangeable and the board keeps both:
 
 - **ECR** (`ff_rankings`) — where experts say a player *should* go. A value
   anchor. This is what the board prices against.
-- **ADP** (this file) — where he *actually* goes on Sleeper. An availability
-  anchor. This is what slot-survival math runs on.
+- **ADP** (this file) — where he *actually* goes. An availability anchor, and
+  what slot-survival math runs on.
 
 The gap between them is the point. See `ecr_vs_adp` in `sql/adp_deltas.sql`.
 
+## Provenance matters — set `provider` honestly
+
+`sources.adp_file.provider` is not a label, it changes what the number means:
+
+- **ADP from the platform the league drafts on** is close to a model of what the
+  other managers see on their screen while picking. Availability claims are
+  strong: "he will likely be there at 25."
+- **ADP from anywhere else** describes a different crowd, possibly at a different
+  league size and scoring format. Still a real price, and the ECR-vs-ADP gap is
+  still informative — but it is not evidence about your specific opponents.
+  Claims must hedge to "the market takes him around here."
+
+This league drafts on **Sleeper** and the current file is **CBS**, so the second
+case applies. `provider` and `format_note` are carried onto every row as
+`adp_source` and `adp_format_note` so the caveat travels with the data instead of
+living one file away from everything that consumes it.
+
+If you ever swap in a file from a different source, **update `provider` in the
+same commit.** A stale provider is worse than none: it makes the board state a
+confident availability claim on the strength of the wrong crowd.
+
 ## Refreshing
 
-1. Copy the current ADP out of Sleeper into `sleeper_adp.csv`.
-2. Drop a dated copy in `history/` so week-over-week drift stays diffable.
-3. Update `sources.sleeper_adp_file.as_of` in `config/sources.yml` to the date
-   the ADP was pulled. This is not optional — it is the date the board reports,
-   and file mtime is wrong after any `git clone`.
+1. Copy the current ADP into `adp.csv`.
+2. Drop a dated copy in `history/`, named `adp-<provider>-<date>.csv`, so
+   week-over-week drift stays diffable and the source stays visible.
+3. Update `sources.adp_file.as_of` — and `provider` if the source changed — in
+   `config/sources.yml`. This is not optional: `as_of` is the date the board
+   reports, and file mtime is wrong after any `git clone`.
 4. `uv run python scripts/ingest.py --sources sleeper`
 5. Confirm the printed link summary lists no new `pending` players. If it does,
    resolve them in `adp_aliases.yml` (below).

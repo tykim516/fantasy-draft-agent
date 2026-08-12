@@ -31,7 +31,7 @@ Expected skips, which are **not** failures:
 - the Sleeper draft proxy, which is skipped whenever the hand-maintained ADP file
   loaded — the file is preferred, so this skip means things are working
 
-`sleeper_adp` **loading** is the normal case. Two things in its detail line need
+`market_adp` **loading** is the normal case. Two things in its detail line need
 reporting rather than passing over:
 
 - `unlinked N` with named players — they need an entry in

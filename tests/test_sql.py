@@ -187,7 +187,7 @@ def test_adp_rank_is_re_ranked_over_the_league_universe(market, warehouse, leagu
     output is only checked for the ordering it inherits.
     """
     universe = warehouse.execute(
-        "SELECT count(*) FROM sleeper_adp WHERE NOT list_contains(?, position)",
+        "SELECT count(*) FROM market_adp WHERE NOT list_contains(?, position)",
         [list(league.excluded_positions)],
     ).fetchone()[0]
     ranked = market.drop_nulls("adp_rank_adj")
@@ -197,7 +197,7 @@ def test_adp_rank_is_re_ranked_over_the_league_universe(market, warehouse, leagu
     # The re-ranking is what removes the kickers. The current export carries 15
     # of them scattered through the list, so the adjusted rank of the deepest
     # surviving player must sit below the raw row count of the file.
-    raw_rows = warehouse.execute("SELECT count(*) FROM sleeper_adp").fetchone()[0]
+    raw_rows = warehouse.execute("SELECT count(*) FROM market_adp").fetchone()[0]
     assert ranked["adp_rank_adj"].max() < raw_rows
 
 
@@ -244,9 +244,24 @@ def test_adp_round_uses_this_league_size(market, league):
 def test_adp_carries_its_own_source_and_date(market):
     """ECR and ADP are different markets with different dates; both get labelled."""
     present = market.drop_nulls("adp")
-    assert present["adp_source"].unique().to_list() == ["sleeper_file"]
     assert present["adp_as_of"].null_count() == 0
     assert present["adp_as_of"].unique().len() == 1
+
+    # The provider is whatever sources.yml declares, not a hardcoded name — the
+    # export has already changed hands once (Sleeper -> CBS) and the label has to
+    # follow the file rather than the other way round.
+    sources = load_sources()["sources"]["adp_file"]
+    assert present["adp_source"].unique().to_list() == [sources["provider"]]
+
+
+def test_the_adp_caveat_travels_with_the_data(market):
+    """Who published the ADP changes what an availability claim is worth, so the
+    caveat rides on every row rather than living in sources.yml where a consumer
+    would have to know to go looking for it."""
+    present = market.drop_nulls("adp")
+    assert present["adp_format_note"].null_count() == 0
+    assert present["adp_format_note"].unique().len() == 1
+    assert len(present["adp_format_note"][0]) > 20, "the note should actually say something"
 
 
 def test_team_defenses_join_across_the_two_sources(market, warehouse):
@@ -261,7 +276,7 @@ def test_team_defenses_join_across_the_two_sources(market, warehouse):
     # abbreviation rather than the team name silently dropped 8 of them, because
     # ff_rankings spells New England NEP and nflverse spells it NE.
     in_file = warehouse.execute(
-        "SELECT count(*) FROM sleeper_adp WHERE position = 'DST'"
+        "SELECT count(*) FROM market_adp WHERE position = 'DST'"
     ).fetchone()[0]
     joined = dst["adp"].drop_nulls().len()
     assert joined >= in_file - 1, f"only {joined} of {in_file} defenses in the file joined"
@@ -291,7 +306,7 @@ def test_the_adp_file_links_essentially_completely(warehouse):
     linked, because an unlinked one silently carries no ADP onto the board.
     """
     total, linked = warehouse.execute(
-        "SELECT count(*), count(*) FILTER (WHERE crosswalk_status = 'linked') FROM sleeper_adp"
+        "SELECT count(*), count(*) FILTER (WHERE crosswalk_status = 'linked') FROM market_adp"
     ).fetchone()
     assert total > 150, "the export is far shallower than this league needs"
     assert linked / total > 0.97, f"only {linked}/{total} ADP rows linked"
@@ -300,7 +315,7 @@ def test_the_adp_file_links_essentially_completely(warehouse):
 def test_no_adp_row_was_resolved_by_guessing(warehouse):
     methods = {
         row[0]
-        for row in warehouse.execute("SELECT DISTINCT link_method FROM sleeper_adp").fetchall()
+        for row in warehouse.execute("SELECT DISTINCT link_method FROM market_adp").fetchall()
     }
     assert methods <= {"alias", "direct", "auto", "team", "activity", "dst", "unlinked"}
 
@@ -314,7 +329,7 @@ def test_adp_is_an_average_pick_not_a_rank(warehouse):
     `adp_is_average_pick` records which kind a given load carries.
     """
     rows = warehouse.execute(
-        "SELECT adp, adp_is_average_pick, adp_earliest, adp_latest FROM sleeper_adp ORDER BY adp"
+        "SELECT adp, adp_is_average_pick, adp_earliest, adp_latest FROM market_adp ORDER BY adp"
     ).fetchall()
     values = [r[0] for r in rows]
 
@@ -330,7 +345,7 @@ def test_adp_is_an_average_pick_not_a_rank(warehouse):
 def test_the_observed_range_is_populated(warehouse):
     """Hi/Lo is what lets survival math use a real spread instead of a fudge."""
     total, ranged = warehouse.execute(
-        "SELECT count(*), count(*) FILTER (WHERE adp_earliest IS NOT NULL) FROM sleeper_adp"
+        "SELECT count(*), count(*) FILTER (WHERE adp_earliest IS NOT NULL) FROM market_adp"
     ).fetchone()
     assert ranged / total > 0.95
 
@@ -338,7 +353,7 @@ def test_the_observed_range_is_populated(warehouse):
 def test_every_adp_row_keeps_a_join_key(warehouse):
     """A linked row must carry either a gsis_id or, for a defense, a team."""
     orphans = warehouse.execute(
-        "SELECT count(*) FROM sleeper_adp "
+        "SELECT count(*) FROM market_adp "
         "WHERE crosswalk_status = 'linked' AND gsis_id IS NULL AND team IS NULL"
     ).fetchone()[0]
     assert orphans == 0

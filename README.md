@@ -17,12 +17,12 @@ uv sync                                          # Python 3.11+, deps from pypro
 uv run python scripts/validate_league.py --summary
 uv run python scripts/ingest.py                  # builds data/ff.duckdb (~30s, ~28 MB)
 uv run python scripts/ingest.py --freshness      # what loaded, how old
-uv run pytest                                    # 219 tests
+uv run pytest                                    # 252 tests
 uv run python scripts/serve.py                   # local draft UI on :8000
 ```
 
-To refresh Sleeper ADP: replace `config/market/sleeper_adp.csv`, update
-`sources.sleeper_adp_file.as_of` in `config/sources.yml`, and re-run
+To refresh ADP: replace `config/market/adp.csv`, update
+`sources.adp_file.as_of` (and `provider`, if the source changed) in `config/sources.yml`, and re-run
 `uv run python scripts/ingest.py --sources sleeper`. See `config/market/README.md`.
 
 No API key is required. FantasyPros is optional; everything else is free and
@@ -62,7 +62,7 @@ CLAUDE.md            orchestrator — decomposes, dispatches, assembles. No anal
 .claude/agents/      five sub-agents
 .claude/commands/    /board, /refresh, /compare
 config/              league config + schema, pinned seasons and source settings
-config/market/       the hand-maintained Sleeper ADP file and its alias map
+config/market/       the hand-maintained ADP file and its alias map
 src/ffdraft/         warehouse, league, scoring, ingest/, metrics/, market/
 src/ffdraft/web/     local draft UI (FastAPI + a static page, no build step)
 sql/                 named queries agents call by filename
@@ -157,7 +157,7 @@ uv run python scripts/query.py usage_profile --show      # print the SQL
 |---|---|
 | `usage_profile` | What is his role? Season rates, last-six window, and the trend between them |
 | `points_over_expected` | Did he earn it? Actual minus expected, with component splits |
-| `adp_deltas` | What does he cost, and when does he leave the board? ECR and Sleeper ADP side by side, rounds at *this* league size, and where the two disagree |
+| `adp_deltas` | What does he cost, and when does he leave the board? ECR and ADP side by side, rounds at *this* league size, and where the two disagree |
 | `roster_context` | Is the role good, or is the player good? Team share, depth chart, IR eligibility |
 
 If agents compose SQL fresh each run, two invocations will compute target share
@@ -175,17 +175,30 @@ actual-minus-expected is the cleanest free regression signal available.
 and trending adds/drops. **FantasyPros** requires `FANTASYPROS_API_KEY` and skips
 cleanly when unset.
 
-**Sleeper ADP** arrives as a file a human maintains at
-`config/market/sleeper_adp.csv`, because Sleeper publishes no ADP endpoint. It is
-the only hand-edited input in the project; see `config/market/README.md`. It
-matters because the league drafts on Sleeper and Sleeper's draft board sorts by
-this number, so it models what the other nine managers will actually do.
+**ADP** arrives as a file a human maintains at `config/market/adp.csv`, because
+no free API publishes it — Sleeper has no ADP endpoint and `nflreadpy` has no ADP
+loader. It is the only hand-edited input in the project; see
+`config/market/README.md`.
 
 The board keeps ECR and ADP as separate columns and never averages them. ECR is a
 *value* anchor (where experts say a player should go) and prices the board; ADP
 is an *availability* anchor (where he actually goes) and drives slot-survival
 math. `ecr_vs_adp` is the gap, and it is the most actionable column on the board
-— a player experts rank higher than the room falls further than his ECR implies.
+— a player experts rank higher than the market falls further than his ECR implies.
+
+**How much the ADP is worth depends on who published it**, so `provider` in
+`config/sources.yml` is a real setting rather than a label, and it rides onto
+every row as `adp_source` alongside `adp_format_note`:
+
+- ADP from **the platform this league drafts on** approximates what the other
+  nine managers see on screen while picking. Availability claims are strong.
+- ADP from **anywhere else** describes a different crowd, possibly at a different
+  league size. Still a real price, and the ECR-vs-ADP gap is still informative,
+  but not evidence about your specific opponents.
+
+The current file is **CBS Sports** while the league drafts on **Sleeper**, so the
+second case applies and the agents are instructed to hedge availability claims
+accordingly. Its league size is not stated in the export.
 
 Three derived tables are built during ingest because no free source provides
 them directly: `pbp_redzone` (red-zone and inside-10 touches, aggregated from
@@ -216,9 +229,9 @@ must halve the reception contribution. Matching another library's PPR number
 would not prove that — the two agree only by coincidence of settings.
 
 ```bash
-uv run pytest                     # 219 tests
-uv run pytest -m "not warehouse"  # 163 unit tests, no ingest required
-uv run pytest -m warehouse        # 56 integration tests against data/ff.duckdb
+uv run pytest                     # 252 tests
+uv run pytest -m "not warehouse"  # 194 unit tests, no ingest required
+uv run pytest -m warehouse        # 58 integration tests against data/ff.duckdb
 ```
 
 Integration tests skip cleanly when the warehouse is absent. They check the
@@ -253,7 +266,7 @@ declared one.
 
 - **ADP is a hand-maintained file and goes stale.** Sleeper publishes no ADP
   endpoint (`/players/nfl/adp` and `/adp/nfl/{season}` both 404) and `nflreadpy`
-  has no ADP loader, so `config/market/sleeper_adp.csv` is copied in by a human
+  has no ADP loader, so `config/market/adp.csv` is copied in by a human
   and dated by hand in `config/sources.yml`. Ingest warns past `max_age_days`,
   but nothing can refresh it automatically. ADP moves fast in August.
 - **ADP covers ~217 players against ECR's ~490.** Past the end of the export

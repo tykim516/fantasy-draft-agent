@@ -15,10 +15,16 @@
 --
 --   ECR  (ff_rankings)  where experts say a player SHOULD go. A value anchor.
 --                       This is what the board prices against.
---   ADP  (sleeper_adp)  where he ACTUALLY goes on Sleeper. An availability
---                       anchor. This is what slot-survival math runs on, because
---                       Sleeper's draft board sorts by it and that ordering is
---                       what the other managers in the league are looking at.
+--   ADP  (market_adp)   where he ACTUALLY goes. An availability anchor, and
+--                       what slot-survival math runs on.
+--
+-- HOW MUCH THE ADP SIDE IS WORTH DEPENDS ON WHO PUBLISHED IT, which is why every
+-- row carries `adp_source` and `adp_format_note`. ADP from the platform the
+-- league actually drafts on is close to a model of what the other managers see
+-- on their screen. ADP from anywhere else is a general market signal about how a
+-- different crowd behaves — still useful as a price, much weaker as a prediction
+-- of who will be gone at YOUR pick. Report which one is in play; do not silently
+-- upgrade the second into the first.
 --
 -- Averaging them would destroy the only thing worth having. `ecr_vs_adp` is the
 -- headline output: a player experts rank 30th but the room drafts 55th is who
@@ -27,9 +33,9 @@
 --
 -- WHY BOTH SERIES ARE RE-RANKED
 --
--- The two lists cover different populations. The Sleeper file ranks ~300 players
--- including 26 kickers scattered throughout; ff_rankings carries its own K rows
--- at different spots. Differencing the raw ranks would measure how much kicker
+-- The two lists cover different populations. The ADP export ranks a couple of
+-- hundred players including kickers scattered throughout; ff_rankings carries
+-- its own K rows at different spots. Differencing the raw ranks would measure how much kicker
 -- contamination each list happens to carry above a given player — an error that
 -- grows the further down the board you read. So each series is dense-ranked
 -- AFTER the $exclude_positions filter, and only those adjusted ranks are
@@ -131,9 +137,10 @@ adp_universe AS (
         a.adp_drafted_pct,
         a.adp_as_of,
         a.adp_source,
+        a.adp_format_note,
         a.crosswalk_status AS adp_crosswalk_status,
         row_number() OVER (ORDER BY a.adp, a.player) AS adp_rank_adj
-    FROM sleeper_adp a
+    FROM market_adp a
     WHERE NOT list_contains($exclude_positions, a.position)
 ),
 
@@ -193,6 +200,7 @@ SELECT
     a.adp_is_average_pick,
     a.adp_as_of,
     a.adp_source,
+    a.adp_format_note,
 
     -- --- where the two disagree ---------------------------------------------
     -- Negative: experts rank him higher than the room does, so he lasts longer

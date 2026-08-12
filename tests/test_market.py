@@ -1,4 +1,4 @@
-"""Identity resolution for the hand-maintained Sleeper ADP file.
+"""Identity resolution for the hand-maintained ADP file.
 
 The governing requirement mirrors the one in test_league.py: this must never
 guess. The project forbids joining on player name because a wrong match corrupts
@@ -408,6 +408,6 @@ def test_the_shipped_config_points_at_a_real_adp_file():
     """A path typo would degrade the board to ECR-only with only a skip line."""
     from ffdraft.config import load_sources, resolve
 
-    cfg = load_sources()["sources"]["sleeper_adp_file"]
+    cfg = load_sources()["sources"]["adp_file"]
     assert resolve(cfg["path"]).is_file()
     assert cfg["as_of"], "as_of must be set; it is the date the board reports"

@@ -164,13 +164,13 @@ def ingest_sleeper(
         results.append(IngestResult("sleeper_trending", SOURCE, "loaded", rows=count))
 
     # The hand-maintained ADP file is preferred over the draft-scraping proxy:
-    # it is Sleeper's own published number rather than our resampling of it.
+    # it is a published ADP rather than our resampling of a handful of drafts.
     file_result = _ingest_adp_file(con, sources)
     results.append(file_result)
     if file_result.status == "loaded":
         results.append(
             IngestResult(
-                "sleeper_adp",
+                "market_adp",
                 SOURCE,
                 "skipped",
                 detail="static ADP file loaded; draft proxy not needed",
@@ -278,10 +278,10 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
     )
     from ..warehouse import replace_table
 
-    cfg = sources["sources"].get("sleeper_adp_file", {})
-    table = "sleeper_adp"
+    cfg = sources["sources"].get("adp_file", {})
+    table = "market_adp"
     if not cfg.get("enabled", False):
-        return IngestResult(table, SOURCE, "skipped", detail="sleeper_adp_file disabled")
+        return IngestResult(table, SOURCE, "skipped", detail="adp_file disabled")
 
     path = resolve(cfg["path"])
     if not path.is_file():
@@ -290,7 +290,14 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
         )
 
     as_of = str(cfg.get("as_of") or "")
-    source_label = f"{SOURCE}_file (as of {as_of or 'unknown'})"
+    # WHO published this ADP, carried onto every board row. It changes what the
+    # number means: ADP from the platform the league drafts on models what the
+    # other managers see on their screen, and ADP from anywhere else is a general
+    # market signal that does not. Defaulting to "unknown" rather than to a
+    # provider name keeps a mislabelled file visible instead of confidently wrong.
+    provider = str(cfg.get("provider") or "unknown").strip().lower()
+    format_note = " ".join(str(cfg.get("format_note") or "").split())
+    source_label = f"adp_file:{provider} (as of {as_of or 'unknown'})"
 
     try:
         with path.open(newline="") as handle:
@@ -369,8 +376,12 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
                 "position_rank_reported": reported_rank,
                 "link_method": resolution.method,
                 "crosswalk_status": resolution.status,
-                "adp_source": "sleeper_file",
+                "adp_source": provider,
                 "adp_as_of": as_of or None,
+                # The caveat travels with the data. Left in sources.yml alone it
+                # is one file away from every consumer, and the one thing that
+                # must never be lost is what population this ADP describes.
+                "adp_format_note": format_note or None,
             }
         )
 
@@ -381,6 +392,7 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
 
     df = pl.DataFrame(rows, infer_schema_length=None).sort("adp")
     count = replace_table(con, table, df, source_label)
+    _drop_legacy_adp_table(con)
 
     detail = stats.summary()
     if stats.pending:
@@ -392,6 +404,23 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
     if stale:
         detail += f" — {stale}"
     return IngestResult(table, SOURCE, "loaded", rows=count, detail=detail)
+
+
+def _drop_legacy_adp_table(con: duckdb.DuckDBPyConnection) -> None:
+    """Remove the pre-rename `sleeper_adp` table.
+
+    The table was renamed to `market_adp` when the ADP source stopped being
+    Sleeper. An existing warehouse keeps the old one forever otherwise, and it
+    would sit in the freshness table looking current while nothing reads it —
+    exactly the kind of quietly-wrong artefact this project tries to avoid.
+    """
+    from ..warehouse import META_TABLE
+
+    try:
+        con.execute('DROP TABLE IF EXISTS "sleeper_adp"')
+        con.execute(f"DELETE FROM {META_TABLE} WHERE table_name = 'sleeper_adp'")
+    except Exception:  # noqa: BLE001 — cleanup must never fail an ingest
+        pass
 
 
 def _adp_staleness_warning(cfg: dict) -> str:
@@ -430,12 +459,12 @@ def _ingest_adp_proxy(
 
     cfg = sources["sources"]["sleeper"].get("adp_proxy", {})
     if not cfg.get("enabled", False):
-        return IngestResult("sleeper_adp", SOURCE, "skipped", detail="adp_proxy disabled")
+        return IngestResult("market_adp", SOURCE, "skipped", detail="adp_proxy disabled")
 
     draft_ids = list(cfg.get("draft_ids") or [])
     if not draft_ids:
         return IngestResult(
-            "sleeper_adp",
+            "market_adp",
             SOURCE,
             "skipped",
             detail=(
@@ -467,7 +496,7 @@ def _ingest_adp_proxy(
 
     if not picks:
         return IngestResult(
-            "sleeper_adp", SOURCE, "failed", detail=f"all {len(draft_ids)} draft fetches failed"
+            "market_adp", SOURCE, "failed", detail=f"all {len(draft_ids)} draft fetches failed"
         )
 
     df = pl.DataFrame(picks).drop_nulls(["player_id", "pick_no"])
@@ -492,5 +521,6 @@ def _ingest_adp_proxy(
     if drafts_seen < minimum:
         detail += f" — below min_drafts={minimum}, treat as low confidence"
 
-    rows = replace_table(con, "sleeper_adp", adp, SOURCE)
-    return IngestResult("sleeper_adp", SOURCE, "loaded", rows=rows, detail=detail)
+    adp = adp.with_columns(adp_source=pl.lit("sleeper_proxy"))
+    rows = replace_table(con, "market_adp", adp, SOURCE)
+    return IngestResult("market_adp", SOURCE, "loaded", rows=rows, detail=detail)
