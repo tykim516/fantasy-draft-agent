@@ -6,6 +6,12 @@ data/
 
 .env
 
+# Scratch scripts an agent writes for a single board run (ranking-synthesizer
+# names them `_<what>_<date>`). They are working notes for one run, not project
+# code: committing them would grow the repo every board, and linting them fails
+# a clean tree on code nobody wrote by hand.
+scripts/_*
+
 # Python
 __pycache__/
 *.py[cod]

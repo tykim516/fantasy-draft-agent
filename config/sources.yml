@@ -141,7 +141,7 @@ sources:
     # The date the ADP was pulled. Set by hand on every refresh — a static file
     # has no scrape date, and file mtime is wrong after any git clone. This is
     # the date the board reports, so a stale value misleads silently.
-    as_of: 2026-08-06
+    as_of: 2026-08-12
     # What population the ADP describes, surfaced as a board caveat. This league
     # is 10-team full-PPR; ADP drawn from a different format is still useful as
     # an ordering but should not be read as exact.

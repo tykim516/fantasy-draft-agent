@@ -40,8 +40,10 @@ def index() -> Index:
             ("kenneth walker", "RB"): {"00-0037746"},
         },
         active={CHASE, AJ_BROWN, "00-0037746"},
-        teams_by_name={"cleveland browns": "CLE", "los angeles rams": "LAR"},
+        teams_by_name={"cleveland browns": "CLE", "los angeles rams": "LA", "buffalo bills": "BUF"},
         sleeper_to_gsis={"4034": CHASE},
+        teams_for={CHASE: {"CIN"}, AJ_BROWN: {"PHI"}, AJ_BROWN_RETIRED: {"TEN"}},
+        team_aliases={"SF": "SFO", "LAR": "LA"},
     )
 
 
@@ -155,6 +157,54 @@ def test_an_unknown_sleeper_id_falls_through_to_name_matching(index):
     assert resolution.method == "auto"
 
 
+# --- team as evidence ------------------------------------------------------
+#
+# The August 12 export packs the team into the player cell ("A.J. Brown WR PHI"),
+# which is direct evidence about identity rather than the inference the activity
+# tiebreak makes. It therefore sits above `activity` on the ladder.
+
+
+def test_team_breaks_a_namesake_tie(index):
+    resolution = resolve_row("A.J. Brown", "WR", index, {}, team="PHI")
+    assert resolution.gsis_id == AJ_BROWN
+    assert resolution.method == "team"
+
+
+def test_team_outranks_the_activity_heuristic(index):
+    """When both would fire, the stated team wins — it is evidence, not a guess.
+
+    Here the retired namesake is also marked active, so activity cannot decide;
+    only the team can.
+    """
+    index.active.add(AJ_BROWN_RETIRED)
+    assert resolve_row("A.J. Brown", "WR", index, {}, team="TEN").gsis_id == AJ_BROWN_RETIRED
+
+
+def test_a_team_nobody_matches_falls_through_rather_than_guessing(index):
+    """A wrong team must not silently pick someone; it drops to the next rung."""
+    resolution = resolve_row("A.J. Brown", "WR", index, {}, team="NYJ")
+    assert resolution.method == "activity"
+    assert resolution.gsis_id == AJ_BROWN
+
+
+def test_team_spelling_variants_are_reconciled(index):
+    """Exports say SF where this warehouse says SFO, and LAR where it says LA. A
+    tiebreak that failed on spelling would quietly fall to a weaker rung."""
+    assert index.canonical_team("LAR") == "LA"
+    assert index.canonical_team("SF") == "SFO"
+    assert index.canonical_team("CLE") == "CLE"
+    assert index.canonical_team(None) is None
+    # An unknown code passes through rather than being rejected: it can only
+    # produce an empty intersection, which correctly falls through to the next
+    # rung. Rejecting it here would couple the tiebreak to the `teams` table.
+    assert index.canonical_team("XXX") == "XXX"
+
+
+def test_team_is_optional(index):
+    """Older exports carry no team column at all; the ladder must still work."""
+    assert resolve_row("Ja'Marr Chase", "WR", index, {}).method == "auto"
+
+
 # --- team defenses ---------------------------------------------------------
 
 
@@ -167,8 +217,28 @@ def test_team_defense_links_on_team_abbreviation(index):
     assert resolution.linked, "a DST with a team is linked despite having no gsis_id"
 
 
+def test_a_defense_with_its_abbreviation_needs_no_name_lookup(index):
+    """The new export writes "Bills DST BUF" — a nickname the full-name map does
+    not contain, but the abbreviation is right there and is the actual join key."""
+    resolution = resolve_row("Bills", "DST", index, {}, team="BUF")
+    assert resolution.method == "dst"
+    assert resolution.team == "BUF"
+
+
+def test_a_defense_abbreviation_is_normalized(index):
+    """"Rams DST LAR" must land on LA, which is what dst_stats is keyed by."""
+    assert resolve_row("Rams", "DST", index, {}, team="LAR").team == "LA"
+
+
 def test_unknown_team_defense_is_unlinked(index):
     assert resolve_row("Toronto Argonauts", "DEF", index, {}).method == "unlinked"
+
+
+def test_a_defense_with_a_bogus_abbreviation_is_refused(index):
+    """For a defense the abbreviation IS the join key, so an unknown one must not
+    pass through — that would be a linked row keyed to a team that does not
+    exist, which is worse than an honest miss."""
+    assert resolve_row("Argonauts", "DST", index, {}, team="TOR").method == "unlinked"
 
 
 def test_defense_never_falls_through_to_the_player_index(index):
@@ -211,6 +281,77 @@ def test_pending_records_candidates_for_an_ambiguous_name(tmp_path):
 def test_alias_lookup_is_normalization_insensitive(tmp_path):
     """The file is hand-edited, so `A.J. Brown` and `AJ Brown` must be one key."""
     assert alias_key("A.J. Brown", "WR") == alias_key("AJ Brown", "wr")
+
+
+# --- the two export layouts ------------------------------------------------
+#
+# Two shapes are in circulation and both must keep parsing, because
+# config/market/history/ holds files in each and a board rebuilt from an older
+# export should still work:
+#
+#   rank-only   Name,ADP,Position ADP           -> ADP *is* a dense rank
+#   full        Rank,Player,Trend,Avg Pos,...   -> ADP is a real average pick
+
+
+@pytest.mark.parametrize(
+    "cell,expected",
+    [
+        ("Jahmyr Gibbs RB  DET", ("Jahmyr Gibbs", "RB", "DET")),
+        ("Ja'Marr Chase WR  CIN", ("Ja'Marr Chase", "WR", "CIN")),
+        ("Bills DST  BUF", ("Bills", "DST", "BUF")),
+        ("Christian Kirk WR  SF", ("Christian Kirk", "WR", "SF")),
+        ("Kenneth Walker III RB  SEA", ("Kenneth Walker III", "RB", "SEA")),
+    ],
+)
+def test_the_packed_player_cell_splits(cell, expected):
+    from ffdraft.ingest.sleeper import _split_player_cell
+
+    assert _split_player_cell(cell) == expected
+
+
+def test_a_bare_name_survives_the_split():
+    """The older layout has a plain Name column with no trailing pair."""
+    from ffdraft.ingest.sleeper import _split_player_cell
+
+    assert _split_player_cell("Jahmyr Gibbs") == ("Jahmyr Gibbs", "", None)
+
+
+def test_a_surname_that_looks_like_a_position_is_not_eaten():
+    """The pattern is anchored at the end, so only a real trailing pos+team wins."""
+    from ffdraft.ingest.sleeper import _split_player_cell
+
+    assert _split_player_cell("Josh Allen QB  BUF") == ("Josh Allen", "QB", "BUF")
+    assert _split_player_cell("Some Guy") == ("Some Guy", "", None)
+
+
+@pytest.mark.parametrize(
+    "raw,expected", [("1/3", (1.0, 3.0)), ("128/248", (128.0, 248.0)), ("", (None, None))]
+)
+def test_the_observed_range_parses(raw, expected):
+    from ffdraft.ingest.sleeper import _parse_hi_lo
+
+    assert _parse_hi_lo(raw) == expected
+
+
+def test_trailing_legend_rows_are_not_players():
+    """Exports append "Legend", "Injury", "News" rows with an empty rest-of-line.
+    Parsed naively they become phantom players at the bottom of the board."""
+    from ffdraft.ingest.sleeper import _header_map, _number
+
+    columns = _header_map(["Rank", "Player", "Trend", "Avg Pos", "Hi/Lo", "Pct"])
+    assert columns["adp"] == "Avg Pos", "Avg Pos must win over any other adp spelling"
+    assert _number("") is None and _number(None) is None
+
+
+def test_both_layouts_map_their_adp_column():
+    from ffdraft.ingest.sleeper import _header_map
+
+    full = _header_map(["Rank", "Player", "Trend", "Avg Pos", "Hi/Lo", "Pct"])
+    assert full["adp"] == "Avg Pos" and full["rank"] == "Rank"
+
+    rank_only = _header_map(["Name", "ADP", "Position ADP"])
+    assert rank_only["adp"] == "ADP" and rank_only["player"] == "Name"
+    assert "rank" not in rank_only, "the old layout has no separate rank column"
 
 
 # --- staleness -------------------------------------------------------------

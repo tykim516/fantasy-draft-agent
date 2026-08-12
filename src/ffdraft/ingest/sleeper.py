@@ -181,17 +181,35 @@ def ingest_sleeper(
     return results
 
 
-# Header spellings accepted from the ADP export, normalized to lowercase with
+# Header spellings accepted from an ADP export, normalized to lowercase with
 # non-letters stripped. Spelled out so a changed export fails loudly on the
 # column it could not find rather than silently ranking on the wrong one.
+#
+# Two layouts are in use and both must keep working, because history/ holds files
+# in each and a board rebuilt from an older export should still work:
+#
+#   rank-only   Name,ADP,Position ADP            ADP *is* a dense rank
+#   full        Rank,Player,Trend,Avg Pos,Hi/Lo,Pct
+#               ADP is a real average pick, and Player packs name+position+team
 _ADP_COLUMNS = {
     "player": ("name", "player", "playername", "fullname"),
-    "adp": ("adp", "avgpick", "averagedraftposition", "overall"),
+    "adp": ("avgpos", "adp", "avgpick", "averagedraftposition", "avg", "overall"),
+    "rank": ("rank", "overallrank", "adprank"),
     "position": ("positionadp", "position", "pos"),
     "team": ("team", "tm"),
+    "hi_lo": ("hilo", "highlow", "range"),
+    "pct": ("pct", "percent", "drafted"),
+    "trend": ("trend",),
     "gsis_id": ("gsisid", "gsis"),
     "sleeper_id": ("sleeperid", "playerid"),
 }
+
+# "Jahmyr Gibbs RB  DET", "Bills DST  BUF" — name, position and team packed into
+# one cell. Anchored at the end so a surname that happens to look like a position
+# cannot win over the real trailing pair.
+_COMBINED_PLAYER_RE = re.compile(
+    r"^(?P<name>.+?)\s+(?P<pos>QB|RB|WR|TE|K|DST|DEF|FB)\s+(?P<team>[A-Z]{2,3})$"
+)
 
 
 def _header_map(fieldnames: list[str]) -> dict[str, str]:
@@ -204,6 +222,39 @@ def _header_map(fieldnames: list[str]) -> dict[str, str]:
                 found[canonical] = seen[spelling]
                 break
     return found
+
+
+def _split_player_cell(cell: str) -> tuple[str, str, str | None]:
+    """Split "Jahmyr Gibbs RB  DET" into name, position and team.
+
+    Returns the cell unchanged as the name when it carries no trailing
+    position/team pair, which is how the older `Name` column behaves.
+    """
+    match = _COMBINED_PLAYER_RE.match((cell or "").strip())
+    if not match:
+        return (cell or "").strip(), "", None
+    return match.group("name").strip(), match.group("pos"), match.group("team")
+
+
+def _number(value: str | None) -> float | None:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_hi_lo(value: str | None) -> tuple[float | None, float | None]:
+    """Split "3/11" into (earliest, latest) pick.
+
+    This is the honest uncertainty on an ADP: a player whose average is 24 but
+    who has gone as early as 9 is a different draft-day problem from one who has
+    never gone before 22, and averaging that away loses the distinction.
+    """
+    text = (value or "").strip()
+    if "/" not in text:
+        return None, None
+    first, _, second = text.partition("/")
+    return _number(first), _number(second)
 
 
 def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestResult:
@@ -220,6 +271,7 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
         ResolverStats,
         build_index,
         load_aliases,
+        normalize_position,
         parse_position_adp,
         resolve_row,
         write_pending,
@@ -264,33 +316,56 @@ def _ingest_adp_file(con: duckdb.DuckDBPyConnection, sources: dict) -> IngestRes
     stats = ResolverStats()
 
     rows = []
+    skipped = 0
     for raw in raw_rows:
-        name = (raw.get(columns["player"]) or "").strip()
-        if not name:
-            continue
-        try:
-            adp = float(raw[columns["adp"]])
-        except (TypeError, ValueError):
+        cell = (raw.get(columns["player"]) or "").strip()
+        if not cell:
             continue
 
+        # Exports carry trailing non-player rows — "Legend", "Injury", "News" —
+        # which have a value in the first column and nothing else. A row with no
+        # usable ADP is not a player, so it is dropped rather than parsed into a
+        # phantom entry sitting at the bottom of the board.
+        adp = _number(raw.get(columns["adp"]))
+        if adp is None:
+            skipped += 1
+            continue
+
+        name, packed_position, packed_team = _split_player_cell(cell)
+        # A dedicated position column wins if present; otherwise take the one
+        # packed into the player cell.
         position, reported_rank = parse_position_adp(raw.get(columns.get("position", ""), ""))
+        if not position:
+            position = normalize_position(packed_position)
+        team = (raw.get(columns.get("team", "")) or "").strip() or packed_team
+
         resolution = resolve_row(
             name,
             position,
             index,
             aliases,
+            team=team,
             file_gsis_id=raw.get(columns.get("gsis_id", "")),
             file_sleeper_id=raw.get(columns.get("sleeper_id", "")),
         )
         stats.record(resolution, name, position)
 
+        hi, lo = _parse_hi_lo(raw.get(columns.get("hi_lo", "")))
         rows.append(
             {
                 "gsis_id": resolution.gsis_id,
-                "team": resolution.team or (raw.get(columns.get("team", "")) or None),
+                "team": resolution.team or team or None,
                 "player": name,
                 "position": position or None,
+                # The average pick when the export gives one, else the dense rank
+                # the older layout published. `adp_is_average_pick` says which,
+                # because pick math is only valid against a real pick number.
                 "adp": adp,
+                "adp_rank": int(_number(raw.get(columns.get("rank", ""))) or 0) or None,
+                "adp_is_average_pick": "rank" in columns,
+                "adp_earliest": hi,
+                "adp_latest": lo,
+                "adp_drafted_pct": _number(raw.get(columns.get("pct", ""))),
                 "position_rank_reported": reported_rank,
                 "link_method": resolution.method,
                 "crosswalk_status": resolution.status,

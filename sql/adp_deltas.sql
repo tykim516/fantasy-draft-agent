@@ -125,6 +125,10 @@ adp_universe AS (
             ELSE a.gsis_id
         END AS join_key,
         a.adp,
+        a.adp_is_average_pick,
+        a.adp_earliest,
+        a.adp_latest,
+        a.adp_drafted_pct,
         a.adp_as_of,
         a.adp_source,
         a.crosswalk_status AS adp_crosswalk_status,
@@ -173,8 +177,20 @@ SELECT
     -- --- the availability anchor --------------------------------------------
     a.adp,
     a.adp_rank_adj,
+    -- Rounds come off the ADJUSTED RANK, not the raw adp. When the export gives
+    -- a real average pick that pick was observed in someone else's league, whose
+    -- size and excluded positions are not this league's — so it cannot be turned
+    -- into a round here without importing their format. The rank can, because it
+    -- has been recomputed over this league's universe.
     cast(ceil(a.adp_rank_adj / cast($teams AS DOUBLE)) AS INTEGER)
                                                            AS adp_round,
+    -- The observed range behind that average. A player averaging 24 who has gone
+    -- as early as 9 is a different draft-day problem from one who has never gone
+    -- before 22, and the average alone erases that.
+    a.adp_earliest,
+    a.adp_latest,
+    a.adp_drafted_pct,
+    a.adp_is_average_pick,
     a.adp_as_of,
     a.adp_source,
 

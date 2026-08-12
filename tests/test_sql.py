@@ -194,14 +194,21 @@ def test_adp_rank_is_re_ranked_over_the_league_universe(market, warehouse, leagu
     assert ranked["adp_rank_adj"].max() <= universe
     assert ranked["adp_rank_adj"].n_unique() == ranked.height, "adjusted ranks are not unique"
 
-    # The re-ranking is what removes the kickers: the deepest surviving player
-    # must rank ahead of where he sat in the raw, kicker-contaminated file.
-    deepest = ranked.sort("adp_rank_adj").tail(1).to_dicts()[0]
-    assert deepest["adp_rank_adj"] <= deepest["adp"]
+    # The re-ranking is what removes the kickers. The current export carries 15
+    # of them scattered through the list, so the adjusted rank of the deepest
+    # surviving player must sit below the raw row count of the file.
+    raw_rows = warehouse.execute("SELECT count(*) FROM sleeper_adp").fetchone()[0]
+    assert ranked["adp_rank_adj"].max() < raw_rows
 
 
 def test_adp_rank_agrees_with_adp_ordering(market):
-    ranked = market.drop_nulls("adp").sort("adp")
+    """Sorted on the same composite key the query uses.
+
+    Three players share an average pick in the current export, so sorting on
+    `adp` alone is not deterministic — the query breaks ties on player name and
+    a check that did not would fail on the tie rather than on a real defect.
+    """
+    ranked = market.drop_nulls("adp").sort(["adp", "player"])
     assert ranked["adp_rank_adj"].to_list() == sorted(ranked["adp_rank_adj"].to_list())
 
 
@@ -242,14 +249,22 @@ def test_adp_carries_its_own_source_and_date(market):
     assert present["adp_as_of"].unique().len() == 1
 
 
-def test_team_defenses_join_across_the_two_sources(market):
+def test_team_defenses_join_across_the_two_sources(market, warehouse):
     """DSTs have no gsis_id on either side and join on team abbreviation, which
     assumes both sources spell teams the nflverse way. Assert it, don't assume."""
     dst = market.filter(pl.col("position") == "DST")
-    assert dst.height >= 25
-    # Joining on the abbreviation instead of the team name silently dropped 8 of
-    # these, because ff_rankings spells New England NEP and nflverse spells it NE.
-    assert dst["adp"].null_count() <= 2
+    assert dst.height >= 25, "ECR should rank essentially every defense"
+
+    # Not every defense carries an ADP: the export only lists the ones actually
+    # being drafted (16 of 32 in the current file), and the rest are waiver
+    # streamers. What must hold is that the ones present DO join — joining on the
+    # abbreviation rather than the team name silently dropped 8 of them, because
+    # ff_rankings spells New England NEP and nflverse spells it NE.
+    in_file = warehouse.execute(
+        "SELECT count(*) FROM sleeper_adp WHERE position = 'DST'"
+    ).fetchone()[0]
+    joined = dst["adp"].drop_nulls().len()
+    assert joined >= in_file - 1, f"only {joined} of {in_file} defenses in the file joined"
 
 
 def test_disagreement_reads_agree_only_inside_one_round(market, league):
@@ -267,12 +282,18 @@ def test_disagreement_names_a_direction(market):
 
 
 def test_the_adp_file_links_essentially_completely(warehouse):
-    """Regression guard on market/resolve.py. At the time of writing all 300 rows
-    link; a drop means the crosswalk or the file's naming changed."""
+    """Regression guard on market/resolve.py. Every row in the current export
+    links; a drop means the crosswalk or the file's naming changed.
+
+    The row count floor is deliberately low. Exports vary in depth — the August
+    12 file carries 217 players against the previous one's 300 — and depth is not
+    what this test is about. What matters is that a player who IS listed gets
+    linked, because an unlinked one silently carries no ADP onto the board.
+    """
     total, linked = warehouse.execute(
         "SELECT count(*), count(*) FILTER (WHERE crosswalk_status = 'linked') FROM sleeper_adp"
     ).fetchone()
-    assert total > 250
+    assert total > 150, "the export is far shallower than this league needs"
     assert linked / total > 0.97, f"only {linked}/{total} ADP rows linked"
 
 
@@ -281,17 +302,37 @@ def test_no_adp_row_was_resolved_by_guessing(warehouse):
         row[0]
         for row in warehouse.execute("SELECT DISTINCT link_method FROM sleeper_adp").fetchall()
     }
-    assert methods <= {"alias", "direct", "auto", "activity", "dst", "unlinked"}
+    assert methods <= {"alias", "direct", "auto", "team", "activity", "dst", "unlinked"}
 
 
-def test_adp_is_a_dense_ranking(warehouse):
-    """The file's ADP column is an ordering, not an average pick number. Ties or
-    gaps would mean the export changed shape and the round math is now wrong."""
-    values = [
-        row[0] for row in warehouse.execute("SELECT adp FROM sleeper_adp ORDER BY adp").fetchall()
-    ]
-    assert values == sorted(set(values)), "ADP values are not unique — is this still a rank?"
-    assert values[0] == 1.0
+def test_adp_is_an_average_pick_not_a_rank(warehouse):
+    """The current export publishes a real average draft position.
+
+    This is a genuine upgrade over the earlier layout, where the column was a
+    dense rank, and the two must not be confused: an average pick can be compared
+    directly against a pick number in slot-survival math, and a rank cannot.
+    `adp_is_average_pick` records which kind a given load carries.
+    """
+    rows = warehouse.execute(
+        "SELECT adp, adp_is_average_pick, adp_earliest, adp_latest FROM sleeper_adp ORDER BY adp"
+    ).fetchall()
+    values = [r[0] for r in rows]
+
+    assert all(r[1] for r in rows), "this export should be flagged as average picks"
+    assert values != sorted(set(values)), "an average pick should have ties; a rank would not"
+    assert values[0] > 1.0, "no player averages the very first pick across many drafts"
+    # The observed range must bracket the average, or the columns are misaligned.
+    for adp, _, earliest, latest in rows:
+        if earliest is not None and latest is not None:
+            assert earliest <= adp <= latest, f"{adp} outside its own {earliest}-{latest} range"
+
+
+def test_the_observed_range_is_populated(warehouse):
+    """Hi/Lo is what lets survival math use a real spread instead of a fudge."""
+    total, ranged = warehouse.execute(
+        "SELECT count(*), count(*) FILTER (WHERE adp_earliest IS NOT NULL) FROM sleeper_adp"
+    ).fetchone()
+    assert ranged / total > 0.95
 
 
 def test_every_adp_row_keeps_a_join_key(warehouse):

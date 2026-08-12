@@ -85,7 +85,13 @@ def get_board(
         upcoming = [p for p in every if p >= state["next_overall"]]
         next_pick = upcoming[0] if upcoming else None
         for row in rows:
-            row["survives"] = survives_to(row.get("adp_rank_adj"), next_pick, state["teams"])
+            row["survives"] = survives_to(
+                row.get("adp_rank_adj"),
+                next_pick,
+                state["teams"],
+                earliest=row.get("adp_earliest"),
+                latest=row.get("adp_latest"),
+            )
 
     return {
         "rows": rows,

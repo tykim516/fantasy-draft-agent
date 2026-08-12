@@ -238,15 +238,37 @@ def picks_for_slot(slot: int, teams: int, rounds: int) -> list[int]:
     return picks
 
 
-def survives_to(adp_rank: float | None, pick: int, teams: int, cushion: float = 0.5) -> str:
+def survives_to(
+    adp_rank: float | None,
+    pick: int,
+    teams: int,
+    cushion: float = 0.5,
+    earliest: float | None = None,
+    latest: float | None = None,
+) -> str:
     """A blunt read on whether a player lasts to a given pick.
 
-    Deliberately three-valued and coarse. ADP is a central tendency with real
-    variance around it, so a precise probability here would be false confidence;
-    half a round of cushion is about the resolution the number supports.
+    Deliberately three-valued. ADP is a central tendency and a precise
+    probability would be false confidence, so this never claims more than
+    likely / toss-up / gone.
+
+    When the export publishes the observed range (`earliest`/`latest`), that is
+    used in preference to a fixed cushion, because it is the real spread rather
+    than a guess at one. A player never taken before pick 40 is genuinely safe at
+    30 even if his average is 35; a player who has gone as early as 9 is not safe
+    at 20 whatever his average says. Without a range, fall back to half a round
+    either side, which is about the resolution a bare average supports.
     """
     if adp_rank is None:
         return "unknown"
+
+    if earliest is not None and latest is not None:
+        if earliest > pick:
+            return "likely"  # never seen taken this early
+        if latest < pick:
+            return "gone"  # never seen lasting this long
+        return "toss-up"
+
     margin = adp_rank - pick
     if margin > teams * cushion:
         return "likely"

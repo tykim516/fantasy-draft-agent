@@ -256,13 +256,16 @@ declared one.
   has no ADP loader, so `config/market/sleeper_adp.csv` is copied in by a human
   and dated by hand in `config/sources.yml`. Ingest warns past `max_age_days`,
   but nothing can refresh it automatically. ADP moves fast in August.
-- **The ADP file's `Position ADP` column disagrees with its own overall
-  ordering** — Chase is ADP 3 / WR2 while Nacua is ADP 4 / WR1. The two columns
-  come from different computations upstream. Only the position label is used;
-  positional rank is re-derived. This is reported, not reconciled.
-- **ADP covers ~300 players against ECR's ~478.** Below roughly the 250th player
+- **ADP covers ~217 players against ECR's ~490.** Past the end of the export
   there is no ADP and the board is priced on ECR alone. Those rows carry a null
-  `adp`, never a substituted one.
+  `adp`, never a substituted one. 217 is still comfortably deeper than the 140
+  players this league rosters.
+- **ADP rounds come from the adjusted rank, not the average pick.** The export
+  publishes an average pick observed in *other people's* drafts, whose league
+  size and excluded positions are not this league's. That number cannot be
+  divided into rounds here without importing their format, so `adp_round` uses
+  the rank recomputed over this league's universe. The raw average pick is still
+  returned, and the survival read uses it against the observed `Hi/Lo` range.
 - **ECR links to `gsis_id` for ~81% of the full list**, via
   `ff_playerids.fantasypros_id`. This is now the binding constraint on ADP
   coverage at the top of the board: six of the top 120 ECR players have no ADP,

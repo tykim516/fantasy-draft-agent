@@ -44,22 +44,57 @@ enough that a two-week-old file will misprice rookies badly.
 
 ## Accepted columns
 
-Header matching is case- and whitespace-insensitive.
+Header matching is case- and whitespace-insensitive. **Two layouts parse**, and
+both keep working, because `history/` holds files in each and a board rebuilt
+from an older export should still build.
+
+### Full layout (current — preferred)
+
+```
+Rank,Player,Trend,Avg Pos,Hi/Lo,Pct
+1,Jahmyr Gibbs RB  DET,—,1.45,1/3,100
+216,Bills DST  BUF,—,176.71,128/248,23
+```
+
+| Column | Required | Notes |
+|---|---|---|
+| `Player` | yes | Name, position and team packed into one cell. Split on the trailing `POS TEAM` pair. |
+| `Avg Pos` | yes | A **real average pick**, not a rank. Ties are expected and fine. |
+| `Rank` | no | The export's own dense ordering. Its presence is what flags the file as carrying average picks. |
+| `Hi/Lo` | no | Earliest and latest pick observed. Drives the survival read. |
+| `Pct` | no | Percent of drafts the player was taken in. |
+| `Trend` | no | Movement since the last publish; stored, not yet used. |
+
+This layout is better on three counts: an average pick can be compared directly
+against a pick number (a rank cannot), `Hi/Lo` gives the real spread instead of a
+guessed cushion, and the packed team abbreviation both disambiguates namesakes
+and keys defenses without a name lookup.
+
+Trailing non-player rows — `Legend`, `Injury`, `News` — are dropped: a row with
+no usable ADP is not a player.
+
+### Rank-only layout (older)
+
+```
+Name,ADP,Position ADP
+Jahmyr Gibbs,1,RB1
+```
 
 | Column | Required | Notes |
 |---|---|---|
 | `Name` / `Player` | yes | Full name. Suffixes and punctuation are normalized away. |
-| `ADP` | yes | A dense rank (1, 2, 3 …), not an average pick number. |
-| `Position ADP` / `Position` / `Pos` | no | `RB1`, `DEF17`; the trailing digits are read but not trusted (see below). |
+| `ADP` | yes | A dense rank (1, 2, 3 …). |
+| `Position ADP` / `Position` / `Pos` | no | `RB1`, `DEF17`; the trailing digits are read but not trusted. |
 | `Team` / `Tm` | no | Improves disambiguation when present. |
 | `sleeper_id` / `gsis_id` | no | If present, used directly and no name matching happens. |
 
-### Known quirk in the current export
+In this layout `Position ADP` does **not** agree with the overall ordering —
+Ja'Marr Chase was ADP 3 / WR2 while Puka Nacua was ADP 4 / WR1, because the two
+columns come from different computations upstream. Only the position *label* is
+used. Do not try to reconcile them.
 
-`Position ADP` does **not** agree with the overall ordering — Ja'Marr Chase is
-ADP 3 / WR2 while Puka Nacua is ADP 4 / WR1. The two columns come from different
-computations upstream. Only the position *label* is used; positional rank is
-re-derived from the overall column. Do not try to reconcile them.
+`adp_is_average_pick` on the loaded table records which layout a given load came
+from, because pick math is only valid against a real pick number.
 
 ## `adp_aliases.yml`
 

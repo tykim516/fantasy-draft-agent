@@ -11,8 +11,10 @@ decision; nothing is resolved by picking the likeliest of several candidates:
     alias     a confirmed entry in adp_aliases.yml. Human decisions win.
     direct    the file carried a gsis_id or sleeper_id.
     auto      exactly one candidate for normalized name + position.
+    team      several candidates, exactly one of whom plays for the team the
+              export names. Direct evidence, so it outranks `activity`.
     activity  several candidates, exactly one of whom plays now.
-    dst       a team defense, matched on team name (no gsis_id exists).
+    dst       a team defense, keyed on its abbreviation (no gsis_id exists).
     unlinked  everything else — written to the alias file as `pending`.
 
 The activity rung is what makes this practical rather than theoretical. Twelve of
@@ -122,7 +124,7 @@ class ResolverStats:
             self.pending.append((name, position, resolution.candidates))
 
     def summary(self) -> str:
-        order = ("alias", "direct", "auto", "activity", "dst", "unlinked")
+        order = ("alias", "direct", "auto", "team", "activity", "dst", "unlinked")
         parts = [f"{key} {self.counts[key]}" for key in order if self.counts[key]]
         return ", ".join(parts)
 
@@ -144,15 +146,45 @@ class Index:
         active: set[str],
         teams_by_name: dict[str, str],
         sleeper_to_gsis: dict[str, str],
+        teams_for: dict[str, set[str]] | None = None,
+        team_aliases: dict[str, str] | None = None,
     ) -> None:
         self.by_name_position = by_name_position
         self.active = active
         self.teams_by_name = teams_by_name
         self.sleeper_to_gsis = sleeper_to_gsis
+        # gsis_id -> every team abbreviation he has appeared for. A set, not a
+        # single value, because a player who changed teams must still match an
+        # export listing either one.
+        self.teams_for = teams_for or {}
+        # Spelling variants -> the abbreviation this warehouse uses. Exports say
+        # SF and the warehouse says SFO, or LAR against LA; a team tiebreak that
+        # fails on spelling is worse than no tiebreak, because it silently falls
+        # through to a weaker rung.
+        self.team_aliases = team_aliases or {}
 
     def candidates(self, name: str, position: str) -> set[str]:
         key = (normalize_name(name), normalize_position(position))
         return self.by_name_position.get(key, set())
+
+    def canonical_team(self, team: str | None) -> str | None:
+        """Map an export's team spelling onto the warehouse's.
+
+        An unrecognised code is returned as-is rather than rejected. It is only
+        ever used to intersect against a candidate's known teams, so a wrong code
+        yields an empty intersection and the ladder falls through to the next
+        rung — which is the correct outcome. Rejecting it here instead would tie
+        the team tiebreak to the completeness of the `teams` table, so a warehouse
+        missing that table would silently stop breaking ties at all.
+        """
+        if not team:
+            return None
+        code = team.strip().upper()
+        return self.team_aliases.get(code, code)
+
+    @property
+    def known_teams(self) -> set[str]:
+        return set(self.teams_by_name.values())
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
@@ -229,7 +261,56 @@ def build_index(con: duckdb.DuckDBPyConnection, recent_season: int = 2024) -> In
             if key not in teams_by_name or (abbr in in_use and teams_by_name[key] not in in_use):
                 teams_by_name[key] = abbr
 
-    return Index(by_name_position, active, teams_by_name, sleeper_to_gsis)
+    # Which teams each player has appeared for, used to break namesake ties on
+    # direct evidence rather than on the activity heuristic.
+    teams_for: dict[str, set[str]] = defaultdict(set)
+    if _table_exists(con, "rosters"):
+        for gsis_id, team in con.execute(
+            "SELECT gsis_id, team FROM rosters WHERE gsis_id IS NOT NULL AND team IS NOT NULL"
+        ).fetchall():
+            teams_for[gsis_id].add(team)
+    if _table_exists(con, "player_stats"):
+        for gsis_id, team in con.execute(
+            "SELECT DISTINCT player_id, team FROM player_stats "
+            "WHERE player_id IS NOT NULL AND team IS NOT NULL AND season >= ?",
+            [recent_season],
+        ).fetchall():
+            teams_for[gsis_id].add(team)
+
+    team_aliases = _team_aliases(set(teams_by_name.values()))
+    return Index(
+        by_name_position, active, teams_by_name, sleeper_to_gsis, dict(teams_for), team_aliases
+    )
+
+
+# Spellings an export may use that this warehouse does not. Only pairs where both
+# sides are unambiguous; anything requiring a judgement call is left to fail
+# loudly rather than be guessed at.
+_TEAM_SPELLINGS = {
+    "SF": "SFO", "SFO": "SF",
+    "KC": "KCC", "KCC": "KC",
+    "TB": "TBB", "TBB": "TB",
+    "GB": "GBP", "GBP": "GB",
+    "NO": "NOS", "NOS": "NO",
+    "NE": "NEP", "NEP": "NE",
+    "LV": "LVR", "LVR": "LV",
+    "JAX": "JAC", "JAC": "JAX",
+    "LA": "LAR", "LAR": "LA",
+    "WAS": "WSH", "WSH": "WAS",
+    "ARI": "ARZ", "ARZ": "ARI",
+    "BAL": "BLT", "BLT": "BAL",
+    "CLE": "CLV", "CLV": "CLE",
+    "HOU": "HST", "HST": "HOU",
+}
+
+
+def _team_aliases(known: set[str]) -> dict[str, str]:
+    """Build variant -> warehouse-spelling for the teams this warehouse knows."""
+    aliases = {}
+    for variant, canonical in _TEAM_SPELLINGS.items():
+        if canonical in known and variant not in known:
+            aliases[variant] = canonical
+    return aliases
 
 
 # --- the alias map ---------------------------------------------------------
@@ -308,10 +389,16 @@ def resolve_row(
     position: str,
     index: Index,
     aliases: dict[str, str],
+    team: str | None = None,
     file_gsis_id: str | None = None,
     file_sleeper_id: str | None = None,
 ) -> Resolution:
-    """Apply the resolution ladder to one market row."""
+    """Apply the resolution ladder to one market row.
+
+    `team` is optional because not every export carries one. When it is present
+    it is used to break namesake ties, which is stronger evidence than the
+    activity heuristic below and needs no assumption about who is still playing.
+    """
     position = normalize_position(position)
 
     # 1. A recorded human decision beats every heuristic below it.
@@ -320,9 +407,17 @@ def resolve_row(
         return Resolution(alias, None, "alias")
 
     # 2. A team defense has no gsis_id; it keys on the team abbreviation, which
-    #    is how dst_stats and every other team-level table is keyed.
+    #    is how dst_stats and every other team-level table is keyed. An export
+    #    that already carries the abbreviation ("Bills DST BUF") needs no lookup
+    #    at all; otherwise fall back to matching the full team name.
     if position == "DST":
-        abbr = index.teams_by_name.get(normalize_name(name))
+        # Validated against the real team list here, unlike the player tiebreak
+        # above: for a defense the abbreviation IS the join key, so an unknown
+        # code would not fall through harmlessly — it would produce a linked row
+        # keyed to a team that does not exist.
+        abbr = index.canonical_team(team)
+        if abbr not in index.known_teams:
+            abbr = index.teams_by_name.get(normalize_name(name))
         return Resolution(None, abbr, "dst" if abbr else "unlinked")
 
     # 3. Ids in the file, if a richer export ever supplies them.
@@ -337,15 +432,24 @@ def resolve_row(
 
     # 4. Exactly one candidate: unambiguous, no judgement involved.
     if len(candidates) == 1:
-        return Resolution(next(iter(candidates)), None, "auto")
+        return Resolution(next(iter(candidates)), team, "auto")
 
-    # 5. Several candidates, exactly one of whom is in the league today. The
-    #    others are retired namesakes. Still not a judgement call — a unique
-    #    survivor or nothing.
     if len(candidates) > 1:
+        # 5. Several candidates, but the export says which team. That is direct
+        #    evidence rather than an inference, so it outranks the activity
+        #    heuristic below.
+        abbr = index.canonical_team(team) if team else None
+        if abbr:
+            on_team = {g for g in candidates if abbr in index.teams_for.get(g, set())}
+            if len(on_team) == 1:
+                return Resolution(next(iter(on_team)), team, "team")
+
+        # 6. No team, or it did not decide: keep only candidates who are in the
+        #    league today. The others are retired namesakes. Still not a
+        #    judgement call — a unique survivor or nothing.
         playing = {gsis_id for gsis_id in candidates if gsis_id in index.active}
         if len(playing) == 1:
-            return Resolution(next(iter(playing)), None, "activity")
-        return Resolution(None, None, "unlinked", tuple(sorted(candidates)))
+            return Resolution(next(iter(playing)), team, "activity")
+        return Resolution(None, team, "unlinked", tuple(sorted(candidates)))
 
-    return Resolution(None, None, "unlinked", ())
+    return Resolution(None, team, "unlinked", ())

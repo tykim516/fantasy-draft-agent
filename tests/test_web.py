@@ -63,6 +63,29 @@ def test_survival_is_coarse_and_three_valued(adp_rank, pick, expected):
     assert survives_to(adp_rank, pick, teams=10) == expected
 
 
+def test_the_observed_range_beats_a_guessed_cushion():
+    """The export publishes the earliest and latest pick a player has gone at,
+    which is the real spread rather than a guess at one.
+
+    A player averaging 35 who has never gone before 40 is genuinely safe at 30 —
+    the fixed half-round cushion would call that a toss-up and talk you out of
+    waiting.
+    """
+    assert survives_to(35, 30, teams=10, earliest=40, latest=60) == "likely"
+    # And the reverse: an average of 35 is no comfort if he has gone as early as 9.
+    assert survives_to(35, 20, teams=10, earliest=9, latest=60) == "toss-up"
+
+
+def test_a_player_never_seen_lasting_this_long_is_gone():
+    assert survives_to(20, 45, teams=10, earliest=8, latest=30) == "gone"
+
+
+def test_the_cushion_is_still_used_when_no_range_is_published():
+    """The older export layout has no Hi/Lo, so the fallback must still work."""
+    assert survives_to(40, 25, teams=10, earliest=None, latest=None) == "likely"
+    assert survives_to(26, 25, teams=10, earliest=None, latest=None) == "toss-up"
+
+
 # --- player keys -----------------------------------------------------------
 
 
