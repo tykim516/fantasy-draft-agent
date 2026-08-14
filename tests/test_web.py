@@ -427,6 +427,145 @@ def test_an_unknown_command_is_rejected_by_the_api(client):
     assert client.post("/api/run", json={"command": "rm -rf"}).status_code == 400
 
 
+# --- reading saved boards --------------------------------------------------
+#
+# A board is 600+ lines and mostly tables, which is close to unreadable as raw
+# text. These cover the two things that would make the reader useless — serving
+# a file it should not, and rendering tables wrongly.
+
+
+@pytest.fixture
+def export_dir(tmp_path, monkeypatch):
+    """A stand-in exports directory with one small board."""
+    from ffdraft.web import exports as exports_module
+
+    directory = tmp_path / "exports"
+    directory.mkdir()
+    (directory / "board_20260101T120000.md").write_text(
+        "# Draft board — league `main`, slot 2\n\n"
+        "## Assumptions\n\nFull PPR, 10 teams.\n\n"
+        "| player | pos | adp |\n|---|---|---|\n| Gibbs | RB | 1.45 |\n"
+        "| Chase | WR | 4.06 |\n\n"
+        "### Tier 1\n\nOnly one player.\n",
+        encoding="utf-8",
+    )
+    (directory / "board_20260102T120000.md").write_text("# Newer board\n", encoding="utf-8")
+    (directory / "notes.txt").write_text("not a board", encoding="utf-8")
+    monkeypatch.setattr(exports_module, "exports_dir", lambda: directory)
+    return directory
+
+
+def test_boards_are_listed_newest_first(export_dir):
+    from ffdraft.web.exports import list_exports
+
+    names = [e.name for e in list_exports()]
+    assert names == ["board_20260102T120000.md", "board_20260101T120000.md"]
+
+
+def test_only_markdown_is_offered(export_dir):
+    from ffdraft.web.exports import list_exports
+
+    assert not any(e.name.endswith(".txt") for e in list_exports())
+
+
+def test_the_listing_shows_the_heading_not_just_the_filename(export_dir):
+    """Filenames are timestamps; the H1 says which slot the board was built for,
+    which is what actually distinguishes two boards."""
+    from ffdraft.web.exports import list_exports
+
+    newest, older = list_exports()
+    assert older.title == "Draft board — league `main`, slot 2"
+    assert newest.title == "Newer board"
+
+
+def test_a_missing_exports_directory_is_empty_not_an_error(tmp_path, monkeypatch):
+    """A fresh clone has never run /board."""
+    from ffdraft.web import exports as exports_module
+
+    monkeypatch.setattr(exports_module, "exports_dir", lambda: tmp_path / "nope")
+    assert exports_module.list_exports() == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../../.env", "/etc/passwd", "..", "board_20260101T120000.md.bak", "does_not_exist.md"],
+)
+def test_only_files_the_listing_offers_can_be_read(export_dir, name):
+    """Validated against the real listing rather than by inspecting the string,
+    so traversal cannot resolve however it is spelled."""
+    from ffdraft.web.exports import read
+
+    with pytest.raises(FileNotFoundError):
+        read(name)
+
+
+def test_tables_actually_render(export_dir):
+    """The whole point — a board is mostly tables, and markdown needs the tables
+    extension enabled or they come out as literal pipe characters."""
+    from ffdraft.web.exports import render
+
+    html = render("board_20260101T120000.md")
+    assert "<table>" in html
+    assert "<th>player</th>" in html
+    assert "<td>1.45</td>" in html
+    assert "|---|" not in html
+
+
+def test_the_rendered_page_is_a_standalone_document(export_dir):
+    """It loads in a sandboxed iframe, which cannot reach the parent's CSS, so
+    it has to carry its own."""
+    from ffdraft.web.exports import render
+
+    html = render("board_20260101T120000.md")
+    assert html.startswith("<!doctype html>")
+    assert "<style>" in html
+    assert "prefers-color-scheme" in html, "should follow the OS theme like the rest of the UI"
+
+
+def test_the_contents_match_the_rendered_anchors(export_dir):
+    """A table of contents whose links do not resolve is worse than none."""
+    import re
+
+    from ffdraft.web.exports import headings, render
+
+    html = render("board_20260101T120000.md")
+    assert [h["id"] for h in headings("board_20260101T120000.md")] == re.findall(
+        r'<h[1-4] id="([^"]+)"', html
+    )
+
+
+def test_headings_inside_code_fences_are_not_contents_entries(export_dir):
+    """A `# comment` in a bash block is not a section."""
+    from ffdraft.web.exports import headings
+
+    (export_dir / "board_fenced.md").write_text(
+        "# Real\n\n```bash\n# not a heading\nuv run python x.py\n```\n\n## Also real\n",
+        encoding="utf-8",
+    )
+    assert [h["text"] for h in headings("board_fenced.md")] == ["Real", "Also real"]
+
+
+def test_the_exports_api_serves_list_toc_html_and_raw(client, export_dir):
+    listing = client.get("/api/exports").json()
+    assert [e["name"] for e in listing][0] == "board_20260102T120000.md"
+
+    name = "board_20260101T120000.md"
+    assert len(client.get(f"/api/exports/{name}/toc").json()) == 3
+
+    html = client.get(f"/api/exports/{name}/html")
+    assert html.status_code == 200
+    assert "<table>" in html.text
+
+    raw = client.get(f"/api/exports/{name}/raw")
+    assert raw.status_code == 200
+    assert raw.text.startswith("# Draft board")
+
+
+@pytest.mark.parametrize("suffix", ["raw", "html", "toc"])
+def test_the_api_refuses_a_file_outside_the_exports_directory(client, export_dir, suffix):
+    assert client.get(f"/api/exports/nope.md/{suffix}").status_code == 404
+
+
 @pytest.mark.warehouse
 def test_the_board_opens_the_warehouse_read_only(warehouse):
     """DuckDB is single-writer. A read-write handle held by an open browser tab

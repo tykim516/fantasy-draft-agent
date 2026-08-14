@@ -17,7 +17,7 @@ uv sync                                          # Python 3.11+, deps from pypro
 uv run python scripts/validate_league.py --summary
 uv run python scripts/ingest.py                  # builds data/ff.duckdb (~30s, ~28 MB)
 uv run python scripts/ingest.py --freshness      # what loaded, how old
-uv run pytest                                    # 252 tests
+uv run pytest                                    # 269 tests
 uv run python scripts/serve.py                   # local draft UI on :8000
 ```
 
@@ -105,7 +105,15 @@ It runs at two speeds, kept deliberately separate:
 | | What it does | How long |
 |---|---|---|
 | **Board / Compare tabs** | Read the warehouse directly — ECR, ADP, tiers, usage, survival-to-your-next-pick | instant |
+| **Saved boards tab** | Reads and renders the markdown boards `/board` wrote to `data/exports/` | instant |
 | **Commands tab** | Shells out to `claude -p "/board …"`, fans out to sub-agents | minutes, costs tokens |
+
+**Saved boards** exist because an agent board runs to 600+ lines and is mostly
+tables — close to unreadable as raw text, and until now reading one meant
+leaving the app that produced it. The tab lists every export newest-first with a
+sticky table of contents, and renders inside a sandboxed iframe: board text is
+LLM-written, so the sandbox is what makes an embedded script inert rather than
+trusting a sanitiser to be perfect. A finished `/board` run refreshes the list.
 
 Use the native board while the clock is running and the agent runs the night
 before. `/refresh` is the exception: it is `data-ingest` and nothing else, so the
@@ -229,8 +237,8 @@ must halve the reception contribution. Matching another library's PPR number
 would not prove that — the two agree only by coincidence of settings.
 
 ```bash
-uv run pytest                     # 252 tests
-uv run pytest -m "not warehouse"  # 194 unit tests, no ingest required
+uv run pytest                     # 269 tests
+uv run pytest -m "not warehouse"  # 211 unit tests, no ingest required
 uv run pytest -m warehouse        # 58 integration tests against data/ff.duckdb
 ```
 

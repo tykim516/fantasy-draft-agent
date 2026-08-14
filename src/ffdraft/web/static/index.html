@@ -16,6 +16,7 @@
 <nav class="tabs">
   <button class="tab active" data-tab="board">Board</button>
   <button class="tab" data-tab="myteam">My team <span class="badge" id="my-count">0</span></button>
+  <button class="tab" data-tab="boards">Saved boards</button>
   <button class="tab" data-tab="compare">Compare</button>
   <button class="tab" data-tab="console">Commands</button>
 </nav>
@@ -81,6 +82,26 @@
     <thead><tr><th>Overall</th><th>Rd</th><th>Player</th><th>Pos</th><th>Mine</th><th></th></tr></thead>
     <tbody></tbody>
   </table>
+</section>
+
+<!-- ---------------- saved boards ---------------- -->
+<section class="panel" id="panel-boards">
+  <div class="controls">
+    <label>Board
+      <select id="export-pick"></select>
+    </label>
+    <span class="pill" id="export-meta">—</span>
+    <span class="spacer"></span>
+    <a id="export-raw" class="ghost-link" href="#" target="_blank" rel="noopener">raw markdown</a>
+  </div>
+  <p class="hint">
+    Boards written by <code>/board</code>, newest first. Timestamped, so you can
+    diff this week's against last week's.
+  </p>
+  <div class="reader">
+    <nav class="toc" id="export-toc"></nav>
+    <iframe id="export-view" title="Board" sandbox></iframe>
+  </div>
 </section>
 
 <!-- ---------------- compare ---------------- -->

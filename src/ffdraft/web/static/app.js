@@ -31,6 +31,14 @@ document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.add("active");
     $("#panel-" + tab.dataset.tab).classList.add("active");
     if (tab.dataset.tab === "myteam") renderTeam();
+    // Loaded on first view rather than at boot: rendering a 600-line board is
+    // wasted work for a session that never opens the tab.
+    if (tab.dataset.tab === "boards" && !boardsLoaded) {
+      boardsLoaded = true;
+      loadExports().catch((err) => {
+        $("#export-meta").textContent = "error: " + err.message;
+      });
+    }
   };
 });
 
@@ -209,6 +217,67 @@ window.release = async (key) => {
   renderTeam();
 };
 
+// ---------------------------------------------------------------- saved boards
+
+let boardsLoaded = false;
+
+async function loadExports() {
+  const list = await api("/api/exports");
+  const pick = $("#export-pick");
+  pick.innerHTML = "";
+
+  if (!list.length) {
+    pick.innerHTML = '<option value="">no boards yet</option>';
+    $("#export-meta").textContent = "run /board to create one";
+    $("#export-toc").innerHTML = "";
+    $("#export-view").removeAttribute("src");
+    return;
+  }
+
+  for (const item of list) {
+    const opt = document.createElement("option");
+    opt.value = item.name;
+    // The filename is a timestamp; the H1 says which slot it was built for,
+    // which is what you actually need to tell two boards apart.
+    opt.textContent = `${item.modified.slice(0, 10)} — ${item.title}`;
+    pick.appendChild(opt);
+  }
+  pick.dataset.meta = JSON.stringify(list);
+  await showExport(list[0].name);
+}
+
+async function showExport(name) {
+  const list = JSON.parse($("#export-pick").dataset.meta || "[]");
+  const item = list.find((x) => x.name === name);
+  $("#export-pick").value = name;
+  $("#export-meta").innerHTML = item
+    ? `<b>${escape(item.name)}</b> · ${(item.size / 1024).toFixed(0)} KB`
+    : "";
+  $("#export-raw").href = `/api/exports/${encodeURIComponent(name)}/raw`;
+  $("#export-view").src = `/api/exports/${encodeURIComponent(name)}/html`;
+
+  const toc = await api(`/api/exports/${encodeURIComponent(name)}/toc`);
+  $("#export-toc").innerHTML = toc
+    .map(
+      (h) =>
+        `<a class="h${h.level}" href="#" data-anchor="${escape(h.id)}">${escape(h.text)}</a>`
+    )
+    .join("");
+}
+
+$("#export-pick").onchange = () => showExport($("#export-pick").value);
+
+// The document lives in a sandboxed iframe, so it has no script of its own to
+// handle anchor clicks — scroll it from the parent instead.
+$("#export-toc").onclick = (event) => {
+  const link = event.target.closest("a[data-anchor]");
+  if (!link) return;
+  event.preventDefault();
+  const doc = $("#export-view").contentDocument;
+  const target = doc && doc.getElementById(link.dataset.anchor);
+  if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
 // ---------------------------------------------------------------- compare
 
 $("#cmp-go").onclick = async () => {
@@ -309,6 +378,12 @@ async function poll() {
     if (view.command === "refresh" && view.status === "done") {
       await post("/api/board/reload");
       await loadBoard();
+    }
+    // A finished /board wrote a new export; pick it up rather than leaving the
+    // reader showing the previous one.
+    if (view.command === "board" && view.status === "done") {
+      boardsLoaded = true;
+      await loadExports().catch(() => {});
     }
     currentJob = null;
   }

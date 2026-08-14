@@ -11,12 +11,13 @@ from typing import Any
 
 import polars as pl
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..config import project_root
 from ..league import load_league
+from . import exports
 from .board import load_board, picks_for_slot, survives_to
 from .draft import DraftStore
 from .runner import Runner
@@ -271,6 +272,44 @@ def cancel(job_id: str) -> dict[str, Any]:
 @app.get("/api/runs")
 def runs() -> list[dict[str, Any]]:
     return runner.recent()
+
+
+# --- board exports ---------------------------------------------------------
+
+
+@app.get("/api/exports")
+def list_boards() -> list[dict[str, Any]]:
+    """Every board `/board` has written, newest first."""
+    return [export.as_dict() for export in exports.list_exports()]
+
+
+@app.get("/api/exports/{name}/toc")
+def board_toc(name: str) -> list[dict[str, Any]]:
+    try:
+        return exports.headings(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/exports/{name}/raw")
+def board_raw(name: str) -> PlainTextResponse:
+    try:
+        return PlainTextResponse(exports.read(name), media_type="text/markdown")
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/exports/{name}/html")
+def board_html(name: str) -> HTMLResponse:
+    """A standalone document, loaded into a sandboxed iframe by the page.
+
+    Board text is LLM-written and therefore untrusted; the sandbox attribute is
+    what makes an embedded script inert, rather than relying on a sanitiser.
+    """
+    try:
+        return HTMLResponse(exports.render(name))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 # --- static ----------------------------------------------------------------
